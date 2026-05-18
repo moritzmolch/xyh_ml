@@ -1,7 +1,5 @@
-# ----------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------
 [project]
-
 name = "xyh_ml"
 version = "0.0.1alpha"
 description = "Machine learning developments for the X &rightarrow; YH &rightarrow; bb&tau;&tau; analysis"
@@ -9,11 +7,24 @@ authors = [ { name = "Moritz Molch", email = "moritz.molch@kit.edu" } ]
 readme = "README.md"
 requires-python = ">=3.8"
 
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 [build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
+[tool.hatch.build.targets.wheel]
+packages = ["src/xyh_ml"]
 
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+[tool.pytest]
+addopts = ["--import-mode=importlib"]
+
+# -----------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 79
