@@ -1,0 +1,19 @@
+# ----------------------------------------------------------------------------
+
+[project]
+
+name = "xyh_ml"
+version = "0.0.1alpha"
+description = "Machine learning developments for the X &rightarrow; YH &rightarrow; bb&tau;&tau; analysis"
+authors = [ { name = "Moritz Molch", email = "moritz.molch@kit.edu" } ]
+readme = "README.md"
+requires-python = ">=3.8"
+
+# ----------------------------------------------------------------------------
+
+[build-system]
+
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ----------------------------------------------------------------------------

@@ -1,0 +1,7 @@
+torch
+torchvision
+lightning
+mlflow
+numpy
+pandas
+pydantic
