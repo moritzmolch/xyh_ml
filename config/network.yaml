@@ -1,0 +1,19 @@
+hidden_layers:
+# ----------------------------------------------------------------------------
+- size: 512
+  activation: "elu"
+  norm: "batch_norm_1d"
+  dropout: "none"
+# ----------------------------------------------------------------------------
+- size: 512
+  activation: "elu"
+  norm: "batch_norm_1d"
+  dropout: "none"
+# ----------------------------------------------------------------------------
+- size: 512
+  activation: "elu"
+  norm: "batch_norm_1d"
+  dropout: "none"
+
+output_layer:
+  activation: "softmax"
