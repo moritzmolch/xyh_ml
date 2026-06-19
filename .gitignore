@@ -221,3 +221,13 @@ __marimo__/
 
 # IDE config
 .vscode/
+
+# Output directory
+output/
+
+# Development notebooks
+notebooks_dev/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
