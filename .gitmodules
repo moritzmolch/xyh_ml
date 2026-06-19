@@ -1,0 +1,3 @@
+[submodule "modules/tayloranalysis"]
+	path = modules/tayloranalysis
+	url = git@github.com:kit-cms/tayloranalysis
