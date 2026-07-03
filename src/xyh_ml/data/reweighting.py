@@ -192,6 +192,13 @@ def reweight(
         # event
         df[training_weight_name] = df[weight_name]
 
+        # Reweight all output classes with negative weights to positive weights
+        # while preserving the normalization of the sample
+        for process in df["class"].unique():
+            df = reweight_sample_with_negative_weights(
+                df, process, training_weight_name
+            )
+
         # Reweight all mass hypotheses within a signal process to have the same
         # sum of weights
         for process in signal_processes:
