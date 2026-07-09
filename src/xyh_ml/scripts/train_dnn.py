@@ -5,6 +5,8 @@ from time import time
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 import torch
 import numpy as np
+import pickle
+import json
 
 from xyh_ml.scripts.model import MultiLayerPerceptron
 
@@ -588,6 +590,32 @@ def _train_and_validate(
     }
 
 
+def _dump_transformations(output_file: Path, transformations: dict):
+    # Serialize transformation objects in a pickle file
+    with output_file.open(mode="wb") as f:
+        pickle.dump(transformations, f)
+    logger.debug(
+        f"Serialized transformations to {output_file} in pickle format"
+    )
+
+
+def _dump_metrics(output_file: Path, metrics: dict):
+    # Serialize tracked metrics in a JSON file
+    with output_file.open(mode="w") as f:
+        json.dump(metrics, f)
+    logger.debug(
+        f"Serialized metrics to {output_file} in JSON format"
+    )
+
+
+def _dump_checkpoints(output_file: Path, checkpoints: list):
+    # Serialize tracked checkpoints with the torch.save function
+    torch.save(checkpoints, output_file)
+    logger.debug(
+        f"Serialized model checkpoints to {output_file} in torch format"
+    )
+
+
 def main():
     # Prepare the output directory
     _prepare_output_dir(OUTPUT_DIR)
@@ -633,6 +661,11 @@ def main():
         TRAINING_HYPERPARAMETERS,
         "cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    # Serialize transformations, checkpoints, and metrics
+    _dump_transformations(OUTPUT_DIR / "transformations.pkl", transformations)
+    _dump_metrics(OUTPUT_DIR / "metrics.json", training_results["metrics"])
+    _dump_checkpoints(OUTPUT_DIR / "checkpoints.pt", training_results["checkpoints"])
 
 
 if __name__ == "__main__":
