@@ -394,6 +394,21 @@ def _setup_transformations(df: pd.DataFrame, variables: list):
         )
 
     return transformations
+
+
+def _apply_transformations(df: pd.DataFrame, transformations: dict):
+    for transformation, transformation_dict in transformations.items():
+        # Get the transformation object and the variables to transform
+        t = transformation_dict["transformation"]
+        v = transformation_dict["variables"]
+
+        # Apply transform to the columns
+        df.loc[:, v] = t.transform(df[v])
+        logger.debug(
+            f"Applied transformation '{transformation}' for variables {v}"
+        )
+
+    return df
 def main():
     # Prepare the output directory
     _prepare_output_dir(OUTPUT_DIR)
