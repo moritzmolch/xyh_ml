@@ -584,8 +584,10 @@ def cross_entropy_loss(prediction, target, weight):
 def _train_and_validate(
     model: torch.nn.Module,
     dataset_train: torch.utils.data.TensorDataset,
+    dataset_val: torch.utils.data.TensorDataset,
     training_hyperparameters: dict,
     device: str,
+    n_steps_logging: int = 25,
 ):
     # Get training hyperparameters
     max_epochs = training_hyperparameters["max_epochs"]
@@ -600,11 +602,18 @@ def _train_and_validate(
         lr=optimizer_learning_rate,
     )
 
-    # Create the data loader
+    # Create the data loaders for training and validation
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train,
         batch_size=batch_size,
         shuffle=True,
+        num_workers=data_loader_num_workers,
+        pin_memory=data_loader_pin_memory,
+    )
+    data_loader_val = torch.utils.data.DataLoader(
+        dataset_val,
+        batch_size=len(dataset_val),
+        shuffle=False,
         num_workers=data_loader_num_workers,
         pin_memory=data_loader_pin_memory,
     )
@@ -644,24 +653,55 @@ def _train_and_validate(
             optimizer.step()
 
             # Track training metrics
-            metrics.setdefault("epoch", []).append(epoch)
-            metrics.setdefault("batch", []).append(batch)
-            metrics.setdefault("step", []).append(step)
-            metrics.setdefault("count", []).append(w.size(0))
-            metrics.setdefault("weight_sum", []).append(w.sum().item())
+            metrics.setdefault("train_step", []).append(step)
+            metrics.setdefault("train_epoch", []).append(epoch)
+            metrics.setdefault("train_batch", []).append(batch)
+            metrics.setdefault("train_count", []).append(w.size(0))
+            metrics.setdefault("train_weight_sum", []).append(w.sum().item())
             metrics.setdefault("train_loss", []).append(loss.item())
 
-            # Log results of step
-            logger.debug(
-                "Training metrics "
-                + "  /  ".join([
-                    f"{name}: {metric_list[-1]}"
-                    for name, metric_list in metrics.items()
-                ])
-            )
+            # Log results
+            if batch % n_steps_logging == 0:
+                logger.debug(
+                    "Training metrics "
+                    + "  /  ".join([
+                        f"{name}: {metric_list[-1]}"
+                        for name, metric_list in metrics.items()
+                        if name.startswith("train")
+                    ])
+                )
 
             # Increment step counter
             step += 1
+
+        # Use model in evaluation mode
+        model = model.eval()
+
+        for batch, (x, y, w) in enumerate(data_loader_val):
+            # Move tensors to training device
+            x, y, w = x.to(device), y.to(device), w.to(device)
+
+            # Get the network prediction and calculate the loss
+            with torch.no_grad():
+                pred = model(x)
+                loss = cross_entropy_loss(pred, y.view(-1), w)
+
+            # Track training metrics
+            metrics.setdefault("val_step", []).append(step)
+            metrics.setdefault("val_epoch", []).append(epoch)
+            metrics.setdefault("val_count", []).append(w.size(0))
+            metrics.setdefault("val_weight_sum", []).append(w.sum().item())
+            metrics.setdefault("val_loss", []).append(loss.item())
+
+            # Log results
+            logger.debug(
+                "Validation metrics "
+                + "  /  ".join([
+                    f"{name}: {metric_list[-1]}"
+                    for name, metric_list in metrics.items()
+                    if name.startswith("val")
+                ])
+            )
 
         # Add model checkpoint after epoch
         checkpoints.append({
@@ -761,7 +801,8 @@ def main():
     # Run the training
     training_results = _train_and_validate(
         model,
-        dataset,
+        datasets["train"],
+        datasets["val"],
         TRAINING_HYPERPARAMETERS,
         "cuda" if torch.cuda.is_available() else "cpu",
     )
