@@ -3,6 +3,7 @@ import pandas as pd
 import logging
 from time import time
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.model_selection import train_test_split
 import torch
 import numpy as np
 import pickle
@@ -13,6 +14,9 @@ from xyh_ml.scripts.model import MultiLayerPerceptron
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# Seeds
+TRAIN_TEST_SPLIT_SEED = 4712
 
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -269,6 +273,10 @@ OUTPUT_VARIABLES = [
     },
 ]
 
+DATASET_HYPERPARAMETERS = {
+    "train_frac": 0.8,
+}
+
 NETWORK_HYPERPARAMETERS = {
     "hidden_layer_sizes": [512, 512, 512],
     "activation": "relu",
@@ -276,7 +284,7 @@ NETWORK_HYPERPARAMETERS = {
 }
 
 TRAINING_HYPERPARAMETERS = {
-    "max_epochs": 20,
+    "max_epochs": 50,
     "batch_size": 2**15,
     "optimizer_learning_rate": 5.0e-3,
     "data_loader_num_workers": 4,
@@ -377,6 +385,29 @@ def _filter_event_parity(df: pd.DataFrame, event_parity: int):
     )
 
     return df
+
+
+def _train_val_split(
+    df: pd.DataFrame,
+    train_frac: float,
+):
+    # Raise an exception if training fraction is not between 0 and 1
+    if train_frac < 0 or train_frac > 1:
+        msg = f"Training fraction must be between 0 and 1, got {train_frac}"
+        logger.critical(msg)
+        raise ValueError(msg)
+
+    df_train, df_val = train_test_split(
+        df,
+        train_size=train_frac,
+        shuffle=True,
+        random_state=TRAIN_TEST_SPLIT_SEED,
+    )
+
+    return {
+        "train": df_train,
+        "val": df_val,
+    }
 
 
 def _reweight_by_group(
@@ -686,31 +717,39 @@ def main():
     data_frame = _filter_event_parity(data_frame, EVENT_PARITY)
 
 
-    # Reweight events so that all categories have the same sum of weights
-    data_frame = _reweight_by_group(
-        data_frame,
-        "category",
-        "weight",
-        "train_weight",
-    )
+    # Split into a training and validation data frame
+    data_frames = _train_val_split(data_frame, train_frac=DATASET_HYPERPARAMETERS["train_frac"])
 
-    # Fit transformations to preprocess input and output variables
+    # Reweight events so that all categories have the same sum of weights
+    for split in data_frames:
+        data_frames[split] = _reweight_by_group(
+            data_frames[split],
+            "category",
+            "weight",
+            "train_weight",
+        )
+
+    # Fit transformations to preprocess input and output variables on the
+    # training dataset
     transformations = _setup_transformations(
-        data_frame,
+        data_frames["train"],
         INPUT_VARIABLES + OUTPUT_VARIABLES,
     )
 
     # Prepare training dataset by applying transformations and creating torch
-    # tensors from the data frame
-    dataset = _prepare_dataset(
-        data_frame,
-        INPUT_VARIABLES,
-        OUTPUT_VARIABLES,
-        {
-            "name": "train_weight",
-        },
-        transformations,
-    )
+    # tensors from the data frame. Create separate datasets for training and
+    # validation.
+    datasets = {}
+    for split, data_frame in data_frames.items():
+        datasets[split] = _prepare_dataset(
+            data_frame,
+            INPUT_VARIABLES,
+            OUTPUT_VARIABLES,
+            {
+                "name": "train_weight",
+            },
+            transformations,
+        )
 
     # Create the neural network model
     model = _create_multi_layer_perceptron_model(
