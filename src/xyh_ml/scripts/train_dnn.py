@@ -264,6 +264,12 @@ OUTPUT_VARIABLES = [
     },
 ]
 
+NETWORK_HYPERPARAMETERS = {
+    "hidden_layer_sizes": [512, 512, 512],
+    "activation": "relu",
+    "dropout_frac": 0.1,
+}
+
 
 def _prepare_output_dir(output_dir: Path):
     # Create the output directory if it does not exist
@@ -445,6 +451,24 @@ def _prepare_dataset(
     return dataset
 
 
+def _create_multi_layer_percepron_model(
+    input_size: int,
+    output_size: int,
+    network_hyperparameters: dict
+):
+    # Create the model
+    model = MultiLayerPerceptron(
+        input_size,
+        output_size,
+        network_hyperparameters["hidden_layer_sizes"],
+        network_hyperparameters["activation"],
+        network_hyperparameters["dropout_frac"],
+        activation_kwargs=network_hyperparameters.get("activation_kwargs", {}),
+    )
+
+    return model
+
+
 def main():
     # Prepare the output directory
     _prepare_output_dir(OUTPUT_DIR)
@@ -474,6 +498,13 @@ def main():
             "name": "weight",
         },
         transformations,
+    )
+
+    # Create the neural network model
+    model = _create_multi_layer_perceptron_model(
+        len(INPUT_VARIABLES),
+        len(CATEGORIES),
+        NETWORK_HYPERPARAMETERS,
     )
 
 
