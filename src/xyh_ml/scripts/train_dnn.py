@@ -6,6 +6,9 @@ from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 import torch
 import numpy as np
 
+from xyh_ml.scripts.model import MultiLayerPerceptron
+
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -270,6 +273,14 @@ NETWORK_HYPERPARAMETERS = {
     "dropout_frac": 0.1,
 }
 
+TRAINING_HYPERPARAMETERS = {
+    "max_epochs": 20,
+    "batch_size": 2**15,
+    "optimizer_learning_rate": 5.0e-3,
+    "data_loader_num_workers": 4,
+    "data_loader_pin_memory": True,
+}
+
 
 def _prepare_output_dir(output_dir: Path):
     # Create the output directory if it does not exist
@@ -451,7 +462,7 @@ def _prepare_dataset(
     return dataset
 
 
-def _create_multi_layer_percepron_model(
+def _create_multi_layer_perceptron_model(
     input_size: int,
     output_size: int,
     network_hyperparameters: dict
@@ -467,6 +478,114 @@ def _create_multi_layer_percepron_model(
     )
 
     return model
+
+
+def cross_entropy_loss(prediction, target, weight):
+    # Get the single losses for each event
+    elements = torch.nn.functional.cross_entropy(
+        prediction,
+        target,
+        reduction="none",
+    )
+
+    # Calculate weighted sum
+    loss = torch.sum(weight * elements) / torch.sum(weight)
+
+    return loss
+
+
+def _train_and_validate(
+    model: torch.nn.Module,
+    dataset_train: torch.utils.data.TensorDataset,
+    training_hyperparameters: dict,
+    device: str,
+):
+    # Get training hyperparameters
+    max_epochs = training_hyperparameters["max_epochs"]
+    batch_size = training_hyperparameters["batch_size"]
+    optimizer_learning_rate = training_hyperparameters["optimizer_learning_rate"]
+    data_loader_num_workers = training_hyperparameters["data_loader_num_workers"]
+    data_loader_pin_memory = training_hyperparameters["data_loader_pin_memory"]
+
+    # Create the optimizer
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=optimizer_learning_rate,
+    )
+
+    # Create the data loader
+    data_loader_train = torch.utils.data.DataLoader(
+        dataset_train,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=data_loader_num_workers,
+        pin_memory=data_loader_pin_memory,
+    )
+
+    # Move the model to the training device
+    model = model.to(device)
+
+    # Metrics container
+    metrics = {}
+
+    # Checkpoints container
+    checkpoints = []
+
+    # Global step counter
+    step = 0
+
+    for epoch in range(max_epochs):
+        # Log training epoch
+        logger.debug(f"Start training epoch {epoch}")
+
+        # Use model in training mode
+        model = model.train()
+
+        for batch, (x, y, w) in enumerate(data_loader_train):
+            # Clear gradients from previous iteration
+            optimizer.zero_grad()
+
+            # Move tensors to training device
+            x, y, w = x.to(device), y.to(device), w.to(device)
+
+            # Get the network prediction and calculate the loss
+            pred = model(x)
+            loss = cross_entropy_loss(pred, y.view(-1), w)
+
+            # Perform backpropagation
+            loss.backward()
+            optimizer.step()
+
+            # Track training metrics
+            metrics.setdefault("epoch", []).append(epoch)
+            metrics.setdefault("batch", []).append(batch)
+            metrics.setdefault("step", []).append(step)
+            metrics.setdefault("train_loss", []).append(loss.item())
+
+            # Log results of step
+            logger.debug(
+                "Training metrics "
+                + "  /  ".join([
+                    f"{name}: {metric_list[-1]}"
+                    for name, metric_list in metrics.items()
+                ])
+            )
+
+            # Increment step counter
+            step += 1
+
+        # Add model checkpoint after epoch
+        checkpoints.append({
+            "epoch": epoch,
+            "step": step,
+            "model_state_dict": model.state_dict().copy(),
+            "optimizer_state_dict": optimizer.state_dict().copy(),
+        })
+
+    return {
+        "checkpoints": checkpoints,
+        "metrics": metrics,
+    }
 
 
 def main():
@@ -505,6 +624,14 @@ def main():
         len(INPUT_VARIABLES),
         len(CATEGORIES),
         NETWORK_HYPERPARAMETERS,
+    )
+
+    # Run the training
+    training_results = _train_and_validate(
+        model,
+        dataset,
+        TRAINING_HYPERPARAMETERS,
+        "cuda" if torch.cuda.is_available() else "cpu",
     )
 
 
