@@ -37,14 +37,14 @@ CATEGORIES = [
         ],
         "is_signal": True,
     },
-    {
-        "name": "t",
-        "label": "Single t",
-        "file_basenames": [
-            "2024__mt__mt_base_sr__single_t__Nominal.h5",
-        ],
-        "is_signal": False,
-    },
+    # {
+    #     "name": "t",
+    #     "label": "Single t",
+    #     "file_basenames": [
+    #         "2024__mt__mt_base_sr__single_t__Nominal.h5",
+    #     ],
+    #     "is_signal": False,
+    # },
     {
         "name": "tt",
         "label": "$\\text{t}\\bar{\\text{t}}$",
