@@ -2,6 +2,7 @@ from pathlib import Path
 import pandas as pd
 import logging
 from time import time
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -75,6 +76,192 @@ CATEGORIES = [
     # },
 ]
 
+INPUT_VARIABLES = [
+    {
+        "name": "n_jets",
+        "transformation": "none",
+    },
+    {
+        "name": "n_bjets",
+        "transformation": "none",
+    },
+    {
+        "name": "pt_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "pt_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "eta_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "eta_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "phi_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "phi_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "m_vis",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "pt_vis",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "deltaR_ditaupair",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_pt_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_pt_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_eta_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_eta_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_phi_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_phi_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_btag_value_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_btag_value_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_m_inv",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_pt_dijet",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "bpair_deltaR",
+        "transformation": "standard_scaling",
+    },
+    # {
+    #     "name": "jpt_1",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jpt_2",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jeta_1",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jeta_2",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jphi_1",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jphi_2",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jtag_value_1",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "jtag_value_2",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "mjj",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "pt_dijet",
+    #     "transformation": "standard_scaling",
+    # },
+    {
+        "name": "met",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "metphi",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "mt_1",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "mt_2",
+        "transformation": "standard_scaling",
+    },
+    {
+        "name": "mt_tot",
+        "transformation": "standard_scaling",
+    },
+    # {
+    #     "name": "mass_tautaubb",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "pt_tautaubb",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "pt_tautau",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "m_fastmtt",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "pt_fastmtt",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "eta_fastmtt",
+    #     "transformation": "standard_scaling",
+    # },
+    # {
+    #     "name": "phi_fastmtt",
+    #     "transformation": "standard_scaling",
+    # },
+]
+
+OUTPUT_VARIABLES = [
+    {
+        "name": "category",
+        "transformation": "ordinal_encoding",
+    },
+]
+
 
 def _prepare_output_dir(output_dir: Path):
     # Create the output directory if it does not exist
@@ -83,7 +270,7 @@ def _prepare_output_dir(output_dir: Path):
         logger.debug(f"Created output directory {output_dir}")
 
 
-def _prepare_input_files(input_dir: Path, categories: dict):
+def _prepare_input_files(input_dir: Path, categories: list):
     # Create dictionary of input file lists, where keys correspond to the
     # output categories of the network
     input_files = {}
@@ -111,7 +298,7 @@ def _prepare_input_files(input_dir: Path, categories: dict):
     return input_files
 
 
-def _load_data_frame(input_files: dict, categories: dict):
+def _load_data_frame(input_files: dict, categories: list):
 
     # List of all data frames that are loaded. The data frames are concatenated
     # to a single data frame later.
@@ -171,6 +358,42 @@ def _filter_event_parity(df: pd.DataFrame, event_parity: int):
     return df
 
 
+def _setup_transformations(df: pd.DataFrame, variables: list):
+
+    # Set up the transformations with sklearn preprocessing objects
+    transformations = {
+        "standard_scaling": {
+            "transformation": StandardScaler(),
+        },
+        "ordinal_encoding": {
+            "transformation": OrdinalEncoder(),
+        },
+    }
+
+    # Add information about transformed variables to the transformations
+    # dictionary
+    for transformation, transformation_dict in transformations.items():
+        transformation_dict.update({
+            "variables": [
+                v["name"]
+                for v in variables
+                if v["transformation"] == transformation
+            ]
+        })
+
+    # Fit the transformations
+    for transformation_dict in transformations.values():
+        # Get the transformation object and the variables to transform
+        t = transformation_dict["transformation"]
+        v = transformation_dict["variables"]
+
+        # Fit the transformation
+        t.fit(df[v])
+        logger.debug(
+            f"Fitted transformation '{transformation}' for variables {v}"
+        )
+
+    return transformations
 def main():
     # Prepare the output directory
     _prepare_output_dir(OUTPUT_DIR)
@@ -183,6 +406,12 @@ def main():
 
     # Filter events according to the event parity
     data_frame = _filter_event_parity(data_frame, EVENT_PARITY)
+
+    # Fit transformations to preprocess input and output variables
+    transformations = _setup_transformations(
+        data_frame,
+        INPUT_VARIABLES + OUTPUT_VARIABLES,
+    )
 
 
 if __name__ == "__main__":
