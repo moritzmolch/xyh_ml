@@ -8,6 +8,7 @@ import torch
 import numpy as np
 import pickle
 import json
+import copy
 
 from xyh_ml.scripts.model import MultiLayerPerceptron
 
@@ -29,6 +30,7 @@ INPUT_DIR = Path("/ceph/mmolch/xyh-bbtautau-crown/bbtautau/data/output/TrainingD
 CATEGORIES = [
     {
         "name": "xyh",
+        "label": "$\\text{X} \\to \\text{H}\\text{Y}$",
         "file_basenames": [
             # "2024__mt__mt_base_sr__xyh_y2b_h2tau__Nominal.h5",
             "2024__mt__mt_base_sr__xyh_y2tau_h2b__Nominal.h5",
@@ -45,7 +47,7 @@ CATEGORIES = [
     },
     {
         "name": "tt",
-        "label": "\\text{t}$\\bar{\\text{t}}$",
+        "label": "$\\text{t}\\bar{\\text{t}}$",
         "file_basenames": [
             "2024__mt__mt_base_sr__tt_rem__Nominal.h5",
             "2024__mt__mt_base_sr__tt_tautau__Nominal.h5",
@@ -707,8 +709,8 @@ def _train_and_validate(
         checkpoints.append({
             "epoch": epoch,
             "step": step,
-            "model_state_dict": model.state_dict().copy(),
-            "optimizer_state_dict": optimizer.state_dict().copy(),
+            "model_state_dict": copy.deepcopy(model.state_dict()),
+            "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
         })
 
     return {
