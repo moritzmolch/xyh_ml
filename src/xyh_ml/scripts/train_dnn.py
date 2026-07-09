@@ -3,6 +3,8 @@ import pandas as pd
 import logging
 from time import time
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+import torch
+import numpy as np
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -409,6 +411,40 @@ def _apply_transformations(df: pd.DataFrame, transformations: dict):
         )
 
     return df
+
+
+def _prepare_dataset(
+    df: pd.DataFrame,
+    input_variables: list,
+    output_variables: list,
+    weight_variable: list,
+    transformations: dict,
+):
+    # Get column names
+    input_variable_names = [v["name"] for v in input_variables]
+    output_variable_names = [v["name"] for v in output_variables]
+    weight_variable_name = weight_variable["name"]
+
+    # Transform input and output variables for training dataset creation
+    df_trans = _apply_transformations(df, transformations)
+
+    # Create torch tensors from transformed data frame
+    x = torch.from_numpy(
+        df_trans.loc[:, input_variable_names].astype(np.float32).to_numpy()
+    ).float()
+    y = torch.from_numpy(
+        df_trans.loc[:, output_variable_names].astype(np.int64).to_numpy()
+    ).long()
+    w = torch.from_numpy(
+        df_trans.loc[:, weight_variable_name].astype(np.float32).to_numpy()
+    ).float()
+
+    dataset = torch.utils.data.TensorDataset(x, y, w)
+    logger.debug("Created dataset with torch tensor objects from data frame")
+
+    return dataset
+
+
 def main():
     # Prepare the output directory
     _prepare_output_dir(OUTPUT_DIR)
@@ -428,6 +464,19 @@ def main():
         INPUT_VARIABLES + OUTPUT_VARIABLES,
     )
 
+    # Prepare training dataset by applying transformations and creating torch
+    # tensors from the data frame
+    dataset = _prepare_dataset(
+        data_frame,
+        INPUT_VARIABLES,
+        OUTPUT_VARIABLES,
+        {
+            "name": "weight",
+        },
+        transformations,
+    )
+
 
 if __name__ == "__main__":
     main()
+
