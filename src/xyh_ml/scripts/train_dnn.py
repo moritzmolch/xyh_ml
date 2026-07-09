@@ -379,6 +379,60 @@ def _filter_event_parity(df: pd.DataFrame, event_parity: int):
     return df
 
 
+def _reweight_by_group(
+    df: pd.DataFrame,
+    group: str | list[str],
+    input_weight_name: str,
+    output_weight_name: str,
+    mask: np.ndarray | None = None,
+):
+    # Log the results
+    logger.debug(
+        f"Reweight column groups {group} from input weight "
+        + f"{input_weight_name} to output weight {output_weight_name}"
+    )
+
+    # Create dummy mask that accepts all events if the mask has not been set
+    # in the function call
+    mask = mask if mask is not None else np.ones(df.shape[0], dtype=bool)
+
+    # Create the grouper
+    df_groups = df.loc[mask].groupby(by=group)
+
+    # Calculate sum of weights for each group and get the average value over
+    # all individual group values
+    sum_of_weights = df_groups.agg({input_weight_name: "sum"})
+    mean_sum_of_weights = sum_of_weights.mean()[0]
+    logger.debug(
+        f"Sum of weights per group before reweighting:\n{sum_of_weights.to_string()}"
+    )
+    logger.debug(
+        f"Average sum of weights: \n{mean_sum_of_weights}"
+    )
+
+    # Calculate the scale factor for each group, which scales the sum of weights
+    # of all groups to the mean sum of weights
+    scale_factor = mean_sum_of_weights / sum_of_weights
+    logger.debug(
+        f"Scale factors for reweighting:\n{scale_factor.to_string()}"
+    )
+
+    # Apply the scale factor
+    for group_values, df_group in df_groups:
+        df.loc[df_group.index, output_weight_name] = (
+            scale_factor.loc[group_values][0]
+            * df.loc[df_group.index, input_weight_name]
+        )
+
+    # Calculate sum of weights after reweighting (for logging purposes)
+    sum_of_weights = df.loc[mask].groupby(by=group).agg({output_weight_name: "sum"})
+    logger.debug(
+        f"Sum of weights per group after reweighting:\n{sum_of_weights.to_string()}"
+    )
+
+    return df
+
+
 def _setup_transformations(df: pd.DataFrame, variables: list):
 
     # Set up the transformations with sklearn preprocessing objects
@@ -426,7 +480,7 @@ def _apply_transformations(df: pd.DataFrame, transformations: dict):
         # Apply transform to the columns
         df.loc[:, v] = t.transform(df[v])
         logger.debug(
-            f"Applied transformation '{transformation}' for variables {v}"
+            f"Applied transformation {transformation} for variables {v}"
         )
 
     return df
@@ -562,6 +616,8 @@ def _train_and_validate(
             metrics.setdefault("epoch", []).append(epoch)
             metrics.setdefault("batch", []).append(batch)
             metrics.setdefault("step", []).append(step)
+            metrics.setdefault("count", []).append(w.size(0))
+            metrics.setdefault("weight_sum", []).append(w.sum().item())
             metrics.setdefault("train_loss", []).append(loss.item())
 
             # Log results of step
@@ -629,6 +685,15 @@ def main():
     # Filter events according to the event parity
     data_frame = _filter_event_parity(data_frame, EVENT_PARITY)
 
+
+    # Reweight events so that all categories have the same sum of weights
+    data_frame = _reweight_by_group(
+        data_frame,
+        "category",
+        "weight",
+        "train_weight",
+    )
+
     # Fit transformations to preprocess input and output variables
     transformations = _setup_transformations(
         data_frame,
@@ -642,7 +707,7 @@ def main():
         INPUT_VARIABLES,
         OUTPUT_VARIABLES,
         {
-            "name": "weight",
+            "name": "train_weight",
         },
         transformations,
     )
