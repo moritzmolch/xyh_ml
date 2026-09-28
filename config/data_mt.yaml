@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 
 data_source:
-  base_dir: /ceph/mmolch/xyh-bbtautau-crown/bbtautau/data/output/TrainingDataFrames/shapes-2026-06-10/2024/mt_base_sr
+  base_dir: /ceph/mmolch/xyh-bbtautau-crown/bbtautau-kit/data/output/shapes-2026-09-27/snapshots/2024_nano_v15/mt__mt_base
   channel: mt
 
 # -----------------------------------------------------------------------------
@@ -19,130 +19,130 @@ input_variables:
   transformation: "none"
 # -----------------------------------------------------------------------------
 - name: "pt_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "pt_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "eta_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "eta_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "phi_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "phi_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "m_vis"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "pt_vis"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "deltaR_ditaupair"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_pt_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_pt_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_eta_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_eta_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_phi_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_phi_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_btag_value_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_btag_value_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_m_inv"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_pt_dijet"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "bpair_deltaR"
-  transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jpt_1"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jpt_2"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jeta_1"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jeta_2"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jphi_1"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jphi_2"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jtag_value_1"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "jtag_value_2"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "mjj"
-#   transformation: "z_score"
-# # -----------------------------------------------------------------------------
-# - name: "pt_dijet"
-#   transformation: "z_score"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jpt_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jpt_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jeta_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jeta_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jphi_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jphi_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jtag_value_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "jtag_value_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "mjj"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "pt_dijet"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "met"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "metphi"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "mt_1"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "mt_2"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "mt_tot"
-  transformation: "z_score"
+  transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 # - name: "mass_tautaubb"
-#   transformation: "z_score"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "pt_tautaubb"
-  transformation: "z_score"
+# - name: "pt_tautaubb"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "pt_tautau"
-  transformation: "z_score"
+# - name: "pt_tautau"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 # - name: "m_fastmtt"
-#   transformation: "z_score"
+#   transformation: "standard_scaling"
 # # -----------------------------------------------------------------------------
 # - name: "pt_fastmtt"
-#   transformation: "z_score"
+#   transformation: "standard_scaling"
 # # -----------------------------------------------------------------------------
 # - name: "eta_fastmtt"
-#   transformation: "z_score"
+#   transformation: "standard_scaling"
 # # -----------------------------------------------------------------------------
 # - name: "phi_fastmtt"
-#   transformation: "z_score"
+#   transformation: "standard_scaling"
 
 
 # -----------------------------------------------------------------------------
@@ -152,10 +152,25 @@ input_variables:
 input_parameters:
 # ----------------------------------------------------------------------------
 - name: "m_x"
-  transformation: "z_score"
+  transformation: "ordinal_encoding"
+  fallback_value: -10.0
 # ----------------------------------------------------------------------------
 - name: "m_y"
-  transformation: "z_score"
+  transformation: "ordinal_encoding"
+  fallback_value: -10.0
+# ----------------------------------------------------------------------------
+- name: "decay_mode"
+  transformation: "ordinal_encoding"
+  fallback_value: "none"
+
+
+# -----------------------------------------------------------------------------
+# Output variables
+# -----------------------------------------------------------------------------
+
+output_variables:
+- name: "category"
+  transformation: "ordinal_encoding"
 
 # -----------------------------------------------------------------------------
 # Process classes
@@ -163,51 +178,55 @@ input_parameters:
 
 output_classes:
 # -----------------------------------------------------------------------------
-- name: "xyh_y2b_h2tau"
-  label: "Y(bb)H($\\tau\\tau$)"
+- name: "xyh"
+  label: "$\\text{X} \\to \\text{H}\\text{Y}$"
   file_basenames:
-  - "2024__mt__mt_base_sr__xyh_y2b_h2tau__Nominal"
-  is_signal: true
-# -----------------------------------------------------------------------------
-- name: "xyh_y2tau_h2b"
-  label: "Y(bb)H($\\tau\\tau$)"
-  file_basenames:
-  - "2024__mt__mt_base_sr__xyh_y2tau_h2b__Nominal"
+  - "xyh_y2.*_h2.*_mx.*_my.*_.*nominal"
   is_signal: true
 # -----------------------------------------------------------------------------
 - name: "t"
-  label: "Single t"
+  label: "Single $\\text{t}$"
   file_basenames:
-  - "2024__mt__mt_base_sr__single_t__Nominal"
+  - "single_t_rem.*nominal"
+  - "single_t_tautau.*nominal"
   is_signal: false
 # -----------------------------------------------------------------------------
 - name: "tt"
-  label: "t$\\bar{t}$"
+  label: "$\\text{t}\\bar{\\text{t}}$"
   file_basenames:
-  - "2024__mt__mt_base_sr__tt_rem__Nominal"
-  - "2024__mt__mt_base_sr__tt_tautau__Nominal"
+  - "tt_rem.*nominal"
+  - "tt_tautau.*nominal"
   is_signal: false
 # -----------------------------------------------------------------------------
 - name: "z"
   label: "Z($\\tau\\tau$)"
   file_basenames:
-  - "2024__mt__mt_base_sr__dy_tautau__Nominal"
+  - "z_tautau.*nominal"
   is_signal: false
 # -----------------------------------------------------------------------------
 - name: "jetfakes"
   label: "$\\text{j} \\to \\tau_{\\text{h}}$"
   file_basenames:
-  - "2024__mt__mt_base_sr__jetfakes__tau_antiid_vs_jet"
+  - "data.*fake_factors"
+  is_signal: false
+  columns:
+  - "ntuple_fake_factor"
+# -----------------------------------------------------------------------------
+- name: "h_2b"
+  label: "H \\to \\text{b}\\bar{\\text{b}}"
+  file_basenames:
+  - "h_2b_rem.*nominal"
   is_signal: false
 # -----------------------------------------------------------------------------
-- name: "single_h"
-  label: "Single H"
+- name: "h_2tau"
+  label: "H \\to \\tau\\tau"
   file_basenames:
-  - "2024__mt__mt_base_sr__single_h__Nominal"
+  - "h_2tau_tautau.*nominal"
   is_signal: false
 # -----------------------------------------------------------------------------
-- name: "diboson"
-  label: "Diboson"
+- name: "vv"
+  label: "VV"
   file_basenames:
-  - "2024__mt__mt_base_sr__vv__Nominal"
+  - "vv_rem.*nominal"
+  - "vv_tautau.*nominal"
   is_signal: false
