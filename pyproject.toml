@@ -17,7 +17,8 @@ dependencies = [
     "matplotlib",
     "mplhep",
     "hist",
-    "seaborn"
+    "seaborn",
+    "hydra-core>=1.3,<2"
 ]
 
 # -----------------------------------------------------------------------------
