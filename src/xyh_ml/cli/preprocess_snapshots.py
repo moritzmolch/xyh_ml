@@ -1,77 +1,11 @@
-import argparse
 import re
 from pathlib import Path
 from typing import Any
 
+import hydra
 import pandas as pd
 import uproot
-
-
-def _parse_arguments():
-    parser = argparse.ArgumentParser(
-        description="Preprocess snapshots and dump to HDF5 files."
-    )
-    parser.add_argument(
-        "--data-config-file",
-        type=Path,
-        required=True,
-        help="Path to the data configuration YAML file.",
-    )
-    parser.add_argument(
-        "--training-tag",
-        type=str,
-        required=True,
-        help="Training tag to identify the training run.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        required=True,
-        help="Directory to save the preprocessed HDF5 files.",
-    )
-    parser.add_argument(
-        "--campaign",
-        type=str,
-        required=True,
-        help="Campaign to process.",
-    )
-    parser.add_argument(
-        "--channel",
-        type=str,
-        required=True,
-        help="Channel to process.",
-    )
-    parser.add_argument(
-        "--category",
-        type=str,
-        required=True,
-        help="Category to process.",
-    )
-    return vars(parser.parse_args())
-
-
-def _load_data_config(data_config_file: Path) -> dict:
-    """
-    Load the data configuration from a YAML file.
-
-    Parameters
-    ----------
-    data_config_file : Path
-        Path to the YAML configuration file.
-
-    Returns
-    -------
-    dict
-        Loaded data configuration as a dictionary.
-    """
-    import yaml
-
-    with open(data_config_file, "r") as f:
-        data_config = yaml.safe_load(f)
-
-        # Get the output class configuration
-
-    return data_config
+from omegaconf import DictConfig, OmegaConf
 
 
 def _build_snapshot_groups(
@@ -177,23 +111,28 @@ def _get_snapshot_filelist(snapshots_dir: Path):
     return list(snapshots_dir.glob("*.root"))
 
 
-def main(**kwargs):
+@hydra.main(
+    config_path="../../../config",
+    config_name="preprocess",
+    version_base="1.3",
+)
+def main(cfg: DictConfig) -> None:
     # Get the training tag, campaign, channel, and category
-    training_tag = kwargs["training_tag"]
-    campaign = kwargs["campaign"]
-    channel = kwargs["channel"]
-    category = kwargs["category"]
+    training_tag = cfg.training_tag
+    campaign = cfg.campaign
+    channel = cfg.channel
+    category = cfg.category
 
     # Get the output directory
     output_dir = (
-        kwargs["output_dir"]
+        Path(cfg.output_dir)
         / training_tag
         / campaign
         / f"{channel}__{category}"
     )
 
-    # Load the data configuration
-    data_config = _load_data_config(kwargs["data_config_file"])
+    # Get the data configuration as a plain dictionary
+    data_config = OmegaConf.to_container(cfg.data, resolve=True)
 
     # Get the snapshot directory from the config
     base_dir = Path(data_config["data_source"]["base_dir"])
@@ -249,5 +188,4 @@ def main(**kwargs):
 
 
 if __name__ == "__main__":
-    kwargs = _parse_arguments()
-    main(**kwargs)
+    main()
