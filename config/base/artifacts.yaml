@@ -1,0 +1,1 @@
+data_frame_dir: /ceph/mmolch/xyh-bbtautau-crown/xyh_ml/${tags.training_tag}/${tags.snapshot_tag}/${mode.decay_mode}/data_frames

@@ -1,0 +1,61 @@
+# -----------------------------------------------------------------------------
+# Output variables
+# -----------------------------------------------------------------------------
+
+variables:
+- name: "category"
+  transformation: "ordinal_encoding"
+
+# -----------------------------------------------------------------------------
+# Process classes
+# -----------------------------------------------------------------------------
+
+classes:
+# -----------------------------------------------------------------------------
+- name: "xyh"
+  label: "$\\text{X} \\to \\text{H}\\text{Y}$"
+  file_basenames:
+  - "xyh_y2.*_h2.*_mx.*_my.*_.*nominal"
+  is_signal: true
+# -----------------------------------------------------------------------------
+- name: "t_tt"
+  label: "$\\text{t}+$\\text{t}\\bar{\\text{t}}$"
+  file_basenames:
+  - "single_t_rem.*nominal"
+  - "single_t_tautau.*nominal"
+  - "tt_rem.*nominal"
+  - "tt_tautau.*nominal"
+  is_signal: false
+# -----------------------------------------------------------------------------
+- name: "z2tau"
+  label: "Z($\\tau\\tau$)"
+  file_basenames:
+  - "z_2tau_tautau.*nominal"
+  is_signal: false
+# -----------------------------------------------------------------------------
+- name: "jetfakes"
+  label: "$\\text{j} \\to \\tau_{\\text{h}}$"
+  file_basenames:
+  - "data.*fake_factors"
+  is_signal: false
+  columns:
+  - "ntuple_fake_factor"
+# -----------------------------------------------------------------------------
+# - name: "h_2b"
+#   label: "H \\to \\text{b}\\bar{\\text{b}}"
+#   file_basenames:
+#   - "h_2b_rem.*nominal"
+#   is_signal: false
+# -----------------------------------------------------------------------------
+# - name: "h_2tau"
+#   label: "H \\to \\tau\\tau"
+#   file_basenames:
+#   - "h_2tau_tautau.*nominal"
+#   is_signal: false
+# -----------------------------------------------------------------------------
+# - name: "vv"
+#   label: "VV"
+#   file_basenames:
+#   - "vv_rem.*nominal"
+#   - "vv_tautau.*nominal"
+#   is_signal: false
