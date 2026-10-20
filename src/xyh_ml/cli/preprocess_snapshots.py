@@ -30,6 +30,7 @@ class Variable:
     name: str
     transformation: str
     fallback_value: float = field(default=-10.0)
+    is_part_of_snapshot: bool = field(default=True)
 
 
 @dataclass
@@ -55,6 +56,7 @@ class Outputs:
 @dataclass
 class Artifacts:
     data_frame_dir: str
+    training_dir: str
 
 
 @dataclass
@@ -67,6 +69,29 @@ class DataSource:
 @dataclass
 class Mode:
     decay_mode: str
+    event_parity: int
+
+
+@dataclass
+class Dataset:
+    train_frac: float
+
+
+@dataclass
+class Network:
+    hidden_layers: list[int]
+    activation: str
+    dropout: float
+    activation_kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Training:
+    max_epochs: int
+    batch_size: int
+    optimizer_learning_rate: float
+    data_loader_num_workers: int
+    data_loader_pin_memory: bool
 
 
 @dataclass
@@ -77,6 +102,9 @@ class Config:
     inputs: Inputs
     outputs: Outputs
     artifacts: Artifacts
+    dataset: Dataset
+    network: Network
+    training: Training
 
 
 def yield_base_dirs(
