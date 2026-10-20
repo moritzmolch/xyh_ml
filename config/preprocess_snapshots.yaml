@@ -6,7 +6,7 @@ defaults:
 - base/mode@mode
 - base/tags@tags
 - base/artifacts@artifacts
-- inputs: y2b
+- inputs: y2b_h2tau
 - base/outputs@outputs
 - base/data_source@data_source
 - _self_
@@ -20,3 +20,4 @@ hydra:
     dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
   job:
     chdir: false
+  verbose: true

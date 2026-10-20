@@ -127,14 +127,23 @@ variables:
 - name: "phi_fastmtt"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_chi2_YToBB"
+- name: "kinfit_chi2_YToTauTau"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_mX_YToBB"
+- name: "kinfit_mX_YToTauTau"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_mY_YToBB"
+- name: "kinfit_mY_YToTauTau"
   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "era"
+  transformation: "ordinal_encoding"
+  is_part_of_snapshot: false
+# -----------------------------------------------------------------------------
+- name: "channel"
+  transformation: "ordinal_encoding"
+  is_part_of_snapshot: false
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Input parameters (PNN)
@@ -145,7 +154,9 @@ parameters:
 - name: "m_x"
   transformation: "ordinal_encoding"
   fallback_value: -10.0
+  is_part_of_snapshot: false
 # ----------------------------------------------------------------------------
 - name: "m_y"
   transformation: "ordinal_encoding"
   fallback_value: -10.0
+  is_part_of_snapshot: false

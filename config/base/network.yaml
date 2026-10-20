@@ -1,0 +1,4 @@
+hidden_layers: [512, 512, 512]
+activation: "relu"
+dropout_frac: 0.1
+activation_kwargs: {}
