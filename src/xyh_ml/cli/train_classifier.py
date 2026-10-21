@@ -2,6 +2,8 @@ import copy
 import json
 import logging
 import pickle
+from functools import reduce
+from operator import or_
 from pathlib import Path
 from time import time
 from typing import Any
@@ -519,6 +521,28 @@ def cross_entropy_loss(
     target: torch.Tensor,
     weight: torch.Tensor,
 ) -> torch.Tensor:
+    """
+    Custom cross-entropy loss function that calculates the weighted mean of
+    cross-entropy losses for a batch of events.
+
+    Parameters
+    ----------
+    prediction : torch.Tensor
+        Predicted class probabilities for each event in the batch. Shape is
+        (batch_size, num_classes).
+
+    target : torch.Tensor
+        True class labels for each event in the batch. Shape is (batch_size,).
+
+    weight : torch.Tensor
+        Event weights for each event in the batch. Shape is (batch_size,).
+
+    Returns
+    -------
+    torch.Tensor
+        Weighted mean of cross-entropy losses for the batch.
+    """
+
     # Get the single losses for each event
     elements = torch.nn.functional.cross_entropy(
         prediction,
@@ -530,6 +554,55 @@ def cross_entropy_loss(
     loss = torch.sum(weight * elements) / torch.sum(weight)
 
     return loss
+
+
+def get_unique_input_parameter_combinations(
+    df: pd.DataFrame,
+    parameter_variables: list[Variable],
+):
+    """
+    Get unique combinations of input parameter values from the data frame.
+
+    Parameters
+    ----------
+
+    df : pd.DataFrame
+        Data frame containing the input parameter values.
+
+    parameter_variables : list[Variable]
+        List of input parameter variables to get unique values for.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data frame containing unique combinations of input parameter values.
+    """
+
+    # Create list of parameter names
+    parameter_names = [p.name for p in parameter_variables]
+
+    logger.debug(
+        "Getting unique combinations of input parameter values for parameters "
+        + f"{parameter_names}"
+    )
+
+    # Get unique values of the parameters in the data frame
+    unique_parameters = df[parameter_names].drop_duplicates()
+
+    # Remove values uniquely composed of fallback values
+    mask = reduce(
+        or_,
+        [
+            unique_parameters.iloc[:, i] != p["fallback_value"]
+            for i, p in enumerate(parameters)
+        ],
+    )
+    unique_parameters = unique_parameters.loc[mask].reset_index(drop=True)
+    logger.debug(
+        f"Found {len(unique_parameters)} unique combinations of input parameter values"
+    )
+
+    return unique_parameters
 
 
 def _train_and_validate(
