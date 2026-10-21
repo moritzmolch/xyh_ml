@@ -78,6 +78,7 @@ class Training:
     max_epochs: int
     batch_size: int
     optimizer_learning_rate: float
+    optimizer_weight_decay: float
     data_loader_num_workers: int
     data_loader_pin_memory: bool
 

@@ -12,8 +12,11 @@ import hydra
 import numpy as np
 import pandas as pd
 import torch
+from pandas import DataFrame
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder, StandardScaler
+from torch import Tensor
+from torch.nn import Module
 from torch.utils.data import TensorDataset
 
 from xyh_ml import PROJECT_DIR
@@ -27,14 +30,14 @@ from xyh_ml.config import (
 )
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Seeds
 TRAIN_TEST_SPLIT_SEED = 4712
+PARAMETER_SAMPLING_SEED = 583
 
 
-def _prepare_output_dir(
+def prepare_output_dir(
     output_dir: Path,
 ):
     # Create the output directory if it does not exist
@@ -48,7 +51,7 @@ def load_data_frame(
     decay_mode: str,
     output_classes: list[OutputClass],
     event_parity: int | None = None,
-) -> pd.DataFrame:
+) -> DataFrame:
     """
     Load the data frame from the preprocessed HDF5 files.
 
@@ -76,7 +79,7 @@ def load_data_frame(
 
     Returns
     -------
-    pd.DataFrame
+    DataFrame
         Concatenated data frame containing the events for all output classes.
 
     Raises
@@ -99,7 +102,7 @@ def load_data_frame(
         raise ValueError(msg)
 
     # List of data frames which are going to be concatenated
-    dfs: list[pd.DataFrame] = []
+    dfs: list[DataFrame] = []
 
     # Track time for loading the data frames
     start = time()
@@ -152,15 +155,15 @@ def load_data_frame(
 
 
 def train_val_split(
-    df: pd.DataFrame,
+    df: DataFrame,
     train_frac: float,
-) -> dict[str, pd.DataFrame]:
+) -> dict[str, DataFrame]:
     """
     Split the full dataset into a training and validation set.
 
     Parameters
     ----------
-    df : pd.DataFrame
+    df : DataFrame
         Full dataset to split into training and validation sets.
 
     train_frac : float
@@ -169,7 +172,7 @@ def train_val_split(
 
     Returns
     -------
-    dict[str, pd.DataFrame]
+    dict[str, DataFrame]
         Dictionary containing the training and validation data frames with
         keys "train" and "val", respectively.
 
@@ -205,11 +208,11 @@ def train_val_split(
 
 
 def reweight_by_group(
-    df: pd.DataFrame,
+    df: DataFrame,
     group: str | list[str],
     weight_name: str,
     mask: np.ndarray | None = None,
-) -> pd.DataFrame:
+) -> DataFrame:
     """
     Reweight events in the data frame such that the sum of weights for each
     group is equal to the mean sum of weights over all groups.
@@ -226,7 +229,7 @@ def reweight_by_group(
 
     Parameters
     ----------
-    df : pd.DataFrame
+    df : DataFrame
         Data frame containing the events to reweight.
 
     group : str | list[str]
@@ -241,7 +244,7 @@ def reweight_by_group(
 
     Returns
     -------
-    pd.DataFrame
+    DataFrame
         Data frame with the modified `weight_name` column.
     """
 
@@ -283,7 +286,7 @@ def reweight_by_group(
 
 
 def derive_transformations(
-    df: pd.DataFrame,
+    df: DataFrame,
     variables: list[Variable],
 ) -> dict[str, dict[str, Any]]:
     """
@@ -297,7 +300,7 @@ def derive_transformations(
 
     Parameters
     ----------
-    df : pd.DataFrame
+    df : DataFrame
         Data frame to fit the transformations on.
 
     variables : list[Variable]
@@ -346,16 +349,16 @@ def derive_transformations(
 
 
 def apply_transformations(
-    df: pd.DataFrame,
+    df: DataFrame,
     transformations: dict[str, dict[str, Any]],
-) -> pd.DataFrame:
+) -> DataFrame:
     """
     Apply the fitted transformations to the input data frame and return the
     transformed data frame.
 
     Parameters
     ----------
-    df : pd.DataFrame
+    df : DataFrame
         Data frame to apply the transformations to.
 
     transformations : dict
@@ -365,7 +368,7 @@ def apply_transformations(
 
     Returns
     -------
-    pd.DataFrame
+    DataFrame
         Transformed data frame with the same columns as the input data frame.
     """
 
@@ -384,7 +387,7 @@ def apply_transformations(
 
 
 def create_torch_dataset(
-    df: pd.DataFrame,
+    df: DataFrame,
     input_variables: list[Variable],
     input_parameters: list[Variable],
     output_variable: Variable,
@@ -411,7 +414,7 @@ def create_torch_dataset(
 
     Parameters
     ----------
-    df : pd.DataFrame
+    df : DataFrame
         Data frame to prepare the dataset from.
 
     input_variables : list[Variable]
@@ -517,29 +520,29 @@ def create_multi_layer_perceptron_model(
 
 
 def cross_entropy_loss(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-    weight: torch.Tensor,
-) -> torch.Tensor:
+    prediction: Tensor,
+    target: Tensor,
+    weight: Tensor,
+) -> Tensor:
     """
     Custom cross-entropy loss function that calculates the weighted mean of
     cross-entropy losses for a batch of events.
 
     Parameters
     ----------
-    prediction : torch.Tensor
+    prediction : Tensor
         Predicted class probabilities for each event in the batch. Shape is
         (batch_size, num_classes).
 
-    target : torch.Tensor
+    target : Tensor
         True class labels for each event in the batch. Shape is (batch_size,).
 
-    weight : torch.Tensor
+    weight : Tensor
         Event weights for each event in the batch. Shape is (batch_size,).
 
     Returns
     -------
-    torch.Tensor
+    Tensor
         Weighted mean of cross-entropy losses for the batch.
     """
 
@@ -557,16 +560,16 @@ def cross_entropy_loss(
 
 
 def get_unique_input_parameter_combinations(
-    df: pd.DataFrame,
+    df: DataFrame,
     parameter_variables: list[Variable],
-):
+) -> DataFrame:
     """
     Get unique combinations of input parameter values from the data frame.
 
     Parameters
     ----------
 
-    df : pd.DataFrame
+    df : DataFrame
         Data frame containing the input parameter values.
 
     parameter_variables : list[Variable]
@@ -574,7 +577,7 @@ def get_unique_input_parameter_combinations(
 
     Returns
     -------
-    pd.DataFrame
+    DataFrame
         Data frame containing unique combinations of input parameter values.
     """
 
@@ -605,18 +608,127 @@ def get_unique_input_parameter_combinations(
     return unique_parameters
 
 
-def _train_and_validate(
-    model: torch.nn.Module,
-    dataset_train: torch.utils.data.TensorDataset,
-    dataset_val: torch.utils.data.TensorDataset,
+def resample_input_parameters(
+    parameters: Tensor,
+    resample_mask: Tensor,
+    unique_parameters: Tensor,
+    rng: torch.Generator | None = None,
+) -> Tensor:
+    """
+    Resample input parameter values for events that are marked for resampling
+    in the `resample_mask`.
+
+    Parameters
+    ----------
+    parameters : Tensor
+        Tensor containing the input parameter values for each event. Shape is
+        (num_events, num_parameters).
+
+    resample_mask : Tensor
+        Boolean tensor indicating which events should have their input parameter
+        values resampled. Shape is (num_events,).
+
+    unique_parameters : Tensor
+        Tensor containing unique combinations of input parameter values. Shape
+        is (num_unique_combinations, num_parameters).
+
+    rng : torch.Generator | None, optional
+        Random number generator to use for sampling. If `None`, the default
+        generator is used. Default is `None`.
+
+    Returns
+    -------
+    Tensor
+        Tensor containing the input parameter values for each event after
+        resampling. Shape is (num_events, num_parameters).
+    """
+
+    # Sample a random index in the unique_parameters list for each event that
+    # is marked for resampling
+    unique_parameters_index = torch.randint(
+        0,
+        unique_parameters.size(0),
+        size=(torch.sum(resample_mask),),
+        generator=rng,
+        device=parameters.device,
+    )
+
+    # Change values of parameters that have been declared for resampling
+    index = torch.where(resample_mask)[0]
+    parameters[index] = unique_parameters[unique_parameters_index]
+
+    return parameters
+
+
+def train_and_validate(
+    model: Module,
+    dataset_train: TensorDataset,
+    dataset_val: TensorDataset,
+    unique_parameters: Tensor,
     training: Training,
     device: str,
     n_steps_logging: int = 25,
-):
+) -> dict[str, Any]:
+    """
+    Training and validation loop for the model.
+
+    The function returns a dictionary with the training results. The dictionary
+    contains the following keys:
+
+    - `"checkpoints"`: List of model checkpoints after each epoch. Each
+        checkpoint is a dictionary containing the following keys:
+        - `"epoch"`: Epoch number.
+        - `"step"`: Global step number.
+        - `"model_state_dict"`: State dictionary of the model.
+        - `"optimizer_state_dict"`: State dictionary of the optimizer.
+
+    - `"metrics"`: Dictionary containing the tracked metrics during training
+      and validation. The keys are the metric names and the values are lists of
+      metric values for each step.
+
+    Parameters
+    ----------
+
+    model : Module
+        PyTorch model to train and validate.
+
+    dataset_train : TensorDataset
+        Training dataset. For more information, see the `create_torch_dataset`
+        function.
+
+    dataset_val : TensorDataset
+        Validation dataset. For more information, see the
+        `create_torch_dataset` function.
+
+    unique_parameters : Tensor
+        Tensor containing unique combinations of input parameter values. Shape
+        is (num_unique_combinations, num_parameters).
+
+    training : Training
+        Training configuration containing hyperparameter settings for the
+        training loop.
+
+    device : str
+        Device to use for training and validation. Must be either `"cpu"` or
+        `"cuda"`.
+
+    n_steps_logging : int, optional
+        Number of training steps between logging of training metrics. Default
+        is 25.
+
+    Returns
+    -------
+
+    dict[str, Any]
+        Dictionary containing the training results. For more information, see
+        the function description.
+    """
+
     # Get training hyperparameters
     max_epochs = training.max_epochs
     batch_size = training.batch_size
     optimizer_learning_rate = training.optimizer_learning_rate
+    optimizer_weight_decay = training.optimizer_weight_decay
     data_loader_num_workers = training.data_loader_num_workers
     data_loader_pin_memory = training.data_loader_pin_memory
 
@@ -624,6 +736,7 @@ def _train_and_validate(
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=optimizer_learning_rate,
+        weight_decay=optimizer_weight_decay,
     )
 
     # Create the data loaders for training and validation
@@ -645,6 +758,13 @@ def _train_and_validate(
     # Move the model to the training device
     model = model.to(device)
 
+    # Create the generator for parameter sampling
+    sampling_rng = torch.Generator(device=device)
+    sampling_rng.manual_seed(PARAMETER_SAMPLING_SEED)
+
+    # Move parameters to the training device
+    unique_parameters = unique_parameters.to(device)
+
     # Metrics container
     metrics = {}
 
@@ -661,15 +781,24 @@ def _train_and_validate(
         # Use model in training mode
         model = model.train()
 
-        for batch, (x, y, w) in enumerate(data_loader_train):
+        for batch, (x, p, y, w, r) in enumerate(data_loader_train):
             # Clear gradients from previous iteration
             optimizer.zero_grad()
 
             # Move tensors to training device
-            x, y, w = x.to(device), y.to(device), w.to(device)
+            x = x.to(device)
+            p = p.to(device)
+            y = y.to(device)
+            w = w.to(device)
+            r = r.to(device)
+
+            # Resample parameters for events that are marked for resampling
+            p = resample_input_parameters(
+                p, r, unique_parameters, rng=sampling_rng
+            )
 
             # Get the network prediction and calculate the loss
-            pred = model(x)
+            pred = model(torch.cat((x, p), dim=-1))
             loss = cross_entropy_loss(pred, y.view(-1), w)
 
             # Perform backpropagation
@@ -703,16 +832,25 @@ def _train_and_validate(
         # Use model in evaluation mode
         model = model.eval()
 
-        for batch, (x, y, w) in enumerate(data_loader_val):
+        for batch, (x, p, y, w, r) in enumerate(data_loader_val):
             # Move tensors to training device
-            x, y, w = x.to(device), y.to(device), w.to(device)
+            x = x.to(device)
+            p = p.to(device)
+            y = y.to(device)
+            w = w.to(device)
+            r = r.to(device)
+
+            # Resample parameters for events that are marked for resampling
+            p = resample_input_parameters(
+                p, r, unique_parameters, rng=sampling_rng
+            )
 
             # Get the network prediction and calculate the loss
             with torch.no_grad():
-                pred = model(x)
+                pred = model(torch.cat((x, p), dim=-1))
                 loss = cross_entropy_loss(pred, y.view(-1), w)
 
-            # Track training metrics
+            # Track validation metrics
             metrics.setdefault("val_step", []).append(step)
             metrics.setdefault("val_epoch", []).append(epoch)
             metrics.setdefault("val_count", []).append(w.size(0))
