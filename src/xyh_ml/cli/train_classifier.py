@@ -342,10 +342,30 @@ def derive_transformations(
     return transformations
 
 
-def _apply_transformations(
+def apply_transformations(
     df: pd.DataFrame,
-    transformations: dict,
+    transformations: dict[str, dict[str, Any]],
 ):
+    """
+    Apply the fitted transformations to the input data frame and return the
+    transformed data frame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Data frame to apply the transformations to.
+
+    transformations : dict
+        Dictionary containing the fitted transformation objects and the
+        corresponding variable names. For more information, see the
+        `derive_transformations` function.
+
+    Returns
+    -------
+    pd.DataFrame
+        Transformed data frame with the same columns as the input data frame.
+    """
+
     for transformation, transformation_dict in transformations.items():
         # Get the transformation object and the variables to transform
         t = transformation_dict["transformation"]
