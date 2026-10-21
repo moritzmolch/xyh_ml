@@ -1,0 +1,26 @@
+# -----------------------------------------------------------------------------
+# Default configuration for evaluating predictions
+# -----------------------------------------------------------------------------
+
+defaults:
+- base/mode@mode
+- base/tags@tags
+- base/artifacts@artifacts
+- inputs: y2b_h2tau
+- base/outputs@outputs
+- base/data_source@data_source
+- base/dataset@dataset
+- base/network@network
+- base/training@training
+- _self_
+
+# -----------------------------------------------------------------------------
+# Hydra configuration
+# -----------------------------------------------------------------------------
+
+hydra:
+  run:
+    dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+  verbose: true

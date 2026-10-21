@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Default configuration for the snapshot preprocessing
+# Default configuration for the classifier training
 # -----------------------------------------------------------------------------
 
 defaults:
