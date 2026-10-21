@@ -147,21 +147,51 @@ def load_data_frame(
     return df
 
 
-def _train_val_split(
+def train_val_split(
     df: pd.DataFrame,
     train_frac: float,
-):
+) -> dict[str, pd.DataFrame]:
+    """
+    Split the full dataset into a training and validation set.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Full dataset to split into training and validation sets.
+
+    train_frac : float
+        Fraction of the full dataset to use for training. Must be between 0 and
+        1.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Dictionary containing the training and validation data frames with
+        keys "train" and "val", respectively.
+
+    Raises
+    ------
+    ValueError
+        If `train_frac` is not between 0 and 1.
+    """
+
     # Raise an exception if training fraction is not between 0 and 1
     if train_frac < 0 or train_frac > 1:
         msg = f"Training fraction must be between 0 and 1, got {train_frac}"
         logger.critical(msg)
         raise ValueError(msg)
 
+    # Use corresponding sklearn function to split the data frame into a
+    # training and validation data frame
     df_train, df_val = train_test_split(
         df,
         train_size=train_frac,
         shuffle=True,
         random_state=TRAIN_TEST_SPLIT_SEED,
+    )
+    logger.debug(
+        "Split into training and validation data frames with "
+        + f"{len(df_train)} and {len(df_val)} events, respectively"
     )
 
     return {
