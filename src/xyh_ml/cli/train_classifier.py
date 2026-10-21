@@ -609,6 +609,86 @@ def get_unique_input_parameter_combinations(
     return unique_parameters
 
 
+def apply_transformations_to_unique_input_parameters(
+    unique_parameters: pd.DataFrame,
+    transformations: dict[str, dict[str, Any]],
+) -> DataFrame:
+    """
+    Apply transformations to the unique parameter combinations.
+
+    Parameters
+    ----------
+    unique_parameters : DataFrame
+        Data frame containing unique combinations of input parameter values.
+
+    transformations : dict
+        Dictionary containing the fitted transformation objects and the
+        corresponding variable names. For more information, see the
+        `derive_transformations` function.
+
+    Returns
+    -------
+    DataFrame
+        Transformed data frame with the same columns as the input data frame.
+    """
+
+    # Remember original sort order of parameters in data frame
+    parameter_names = unique_parameters.columns.tolist()
+
+    for transformation, transformation_dict in transformations.items():
+        # Get the transformation object and the variables to transform
+        t = transformation_dict["transformation"]
+        v = transformation_dict["variables"]
+
+        # Determine overlap between transformation's variable list and the
+        # columns of the unique_parameters data frame
+        v_overlap = list(set(v).intersection(set(unique_parameters.columns)))
+
+        # Continue if there is no overlap
+        if len(v_overlap) == 0:
+            continue
+
+        # TODO this is a hotfix, improve the implementation
+
+        # Create temporary transformation that only contains the overlapping
+        # variables
+        t_tmp = None
+        if transformation == "ordinal_encoding":
+            feature_names_in = t.get_feature_names_out().tolist()
+            categories = [
+                t.categories_[feature_names_in.index(vo)] for vo in v_overlap
+            ]
+            t_tmp = copy.deepcopy(t)
+            t_tmp.categories_ = categories
+            t_tmp.feature_names_in_ = np.array(v_overlap)
+            t_tmp.n_features_in_ = len(v_overlap)
+        else:
+            feature_names_out = t.get_feature_names_out().tolist()
+            mean = np.array(
+                [t.mean_[feature_names_out.index(vo)] for vo in v_overlap]
+            )
+            scale = np.array(
+                [t.scale_[feature_names_out.index(vo)] for vo in v_overlap]
+            )
+            t_tmp = StandardScaler()
+            t_tmp.mean_, t_tmp.scale_ = mean, scale
+
+        # Apply transform to the columns
+        unique_parameters.loc[:, v_overlap] = t_tmp.transform(
+            unique_parameters[v_overlap]
+        )
+        logger.debug(
+            f"Applied transformation {transformation} for variables "
+            + f"{v_overlap}"
+        )
+
+    # Reorder the columns of the unique_parameters data frame to match the
+    # original order
+    unique_parameters = unique_parameters.loc[:, parameter_names]
+
+    return unique_parameters
+
+
 def resample_input_parameters(
     parameters: Tensor,
     resample_mask: Tensor,
@@ -986,53 +1066,59 @@ def dump_checkpoints(
     version_base="1.3",
 )
 def main(cfg: Config):
-
-    # Prepare the output directory
-    _prepare_output_dir(Path(cfg.artifacts.training_dir))
+    # Create output directory if it does not exist
+    training_dir = Path(cfg.artifacts.training_dir)
+    if not training_dir.exists():
+        training_dir.mkdir(parents=True)
+        logger.debug(f"Created output directory {training_dir}")
 
     # Load the input files into a data frame
-    data_frame = _load_data_frame(
+    data_frame = load_data_frame(
         Path(cfg.artifacts.data_frame_dir),
         cfg.mode.decay_mode,
         cfg.outputs.classes,
     )
 
-    # Filter events according to the event parity
-    data_frame = _filter_event_parity(data_frame, cfg.mode.event_parity)
+    # Get unique parameter combinations
+    unique_parameters = get_unique_input_parameter_combinations(
+        data_frame,
+        cfg.inputs.parameters,
+    )
 
-    # Turn negative weights into positive weights
-    data_frame.loc[:, "__total_weight"] = np.abs(
+    # Define training weight column and turn negative weights into positive
+    # weights
+    train_weight = "train_weight"
+    data_frame.loc[:, train_weight] = np.abs(
         data_frame.loc[:, "__total_weight"]
     )
 
-    # # Split into a training and validation data frame
-    data_frames = _train_val_split(
+    # Split into a training and validation data frame
+    data_frames = train_val_split(
         data_frame,
         train_frac=cfg.dataset.train_frac,
     )
 
-    # Reweight events so that all signal hypotheses have the same sum of weights
+    # Reweight events so that all signal hypotheses have the same sum of
+    # weights
     for split in data_frames:
-        data_frames[split] = _reweight_by_group(
+        data_frames[split] = reweight_by_group(
             data_frames[split],
             ["m_x", "m_y"],
-            "__total_weight",
-            "train_weight",
+            train_weight,
             mask=data_frames[split]["is_signal"],
         )
 
     # Reweight events so that all categories have the same sum of weights
     for split in data_frames:
-        data_frames[split] = _reweight_by_group(
+        data_frames[split] = reweight_by_group(
             data_frames[split],
             "class",
-            "train_weight",
-            "train_weight",
+            train_weight,
         )
 
     # Fit transformations to preprocess input and output variables on the
     # training dataset
-    transformations = _setup_transformations(
+    transformations = derive_transformations(
         data_frames["train"],
         cfg.inputs.variables + cfg.inputs.parameters + cfg.outputs.variables,
     )
@@ -1042,35 +1128,50 @@ def main(cfg: Config):
     # validation.
     datasets = {}
     for split, data_frame in data_frames.items():
-        datasets[split] = _prepare_dataset(
+        datasets[split] = create_torch_dataset(
             data_frame,
-            cfg.inputs.variables + cfg.inputs.parameters,
-            cfg.outputs.variables,
-            "train_weight",
+            cfg.inputs.variables,
+            cfg.inputs.parameters,
+            cfg.outputs.variables[0],
+            train_weight,
             transformations,
         )
 
+    # Apply transformations to the unique parameter combinations and create a
+    # torch tensor from the data frame
+    unique_parameters_transformed = torch.from_numpy(
+        (
+            apply_transformations_to_unique_input_parameters(
+                unique_parameters, transformations
+            )
+            .astype(np.float32)
+            .to_numpy()
+        )
+    )
+
     # Create the neural network model
-    model = _create_multi_layer_perceptron_model(
+    model = create_multi_layer_perceptron_model(
         len(cfg.inputs.variables) + len(cfg.inputs.parameters),
         len(cfg.outputs.classes),
         cfg.network,
     )
 
     # Run the training
-    training_results = _train_and_validate(
+    training_results = train_and_validate(
         model,
         datasets["train"],
         datasets["val"],
+        unique_parameters_transformed,
         cfg.training,
         "cuda" if torch.cuda.is_available() else "cpu",
     )
 
     # Serialize transformations, checkpoints, and metrics
     output_dir = Path(cfg.artifacts.training_dir)
-    _dump_transformations(output_dir / "transformations.pkl", transformations)
-    _dump_metrics(output_dir / "metrics.json", training_results["metrics"])
-    _dump_checkpoints(
+    dump_config(output_dir / "config.json", cfg)
+    dump_transformations(output_dir / "transformations.pkl", transformations)
+    dump_metrics(output_dir / "metrics.json", training_results["metrics"])
+    dump_checkpoints(
         output_dir / "checkpoints.pt", training_results["checkpoints"]
     )
 
