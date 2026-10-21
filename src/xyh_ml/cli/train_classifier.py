@@ -3,6 +3,7 @@ import json
 import logging
 import pickle
 from pathlib import Path
+from time import time
 
 import hydra
 import numpy as np
@@ -13,7 +14,7 @@ from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.cli.model import MultiLayerPerceptron
-from xyh_ml.cli.preprocess_snapshots import (
+from xyh_ml.config import (
     Config,
     Network,
     OutputClass,
@@ -38,50 +39,109 @@ def _prepare_output_dir(
         logger.debug(f"Created output directory {output_dir}")
 
 
-def _load_data_frame(
+def load_data_frame(
     data_frame_dir: Path,
     decay_mode: str,
     output_classes: list[OutputClass],
+    event_parity: int | None = None,
 ):
+    """
+    Load the data frame from the preprocessed HDF5 files.
+
+    For signal events, the data frame is filtered for the given `decay_mode`.
+    If `event_parity` is set to 0 or 1, the data frame is filtered for even
+    or odd events. The full data frame is loaded otherwise.
+
+    The data frame is shuffled before being returned.
+
+    Parameters
+    ----------
+    data_frame_dir : Path
+        Path to the directory containing the preprocessed HDF5 files.
+
+    decay_mode : str
+        Decay mode to filter the signal events for. Must be either `y2b_h2tau`
+        or `y2tau_h2b`.
+
+    output_classes : list[OutputClass]
+        List of output classes to load the data frames for.
+
+    event_parity : int | None, optional
+        Event parity to filter the events for. Must be either 0, 1, or `None`.
+        If `None`, no filtering is applied. Default is `None`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Concatenated data frame containing the events for all output classes.
+
+    Raises
+    ------
+    ValueError
+        - If `decay_mode` is not `y2b_h2tau` or `y2tau_h2b`.
+        - If `event_parity` is not 0, 1, or `None`.
+    """
+
+    # Raise exception if decay mode is not `y2b_h2tau` or `y2tau_h2b`
+    if decay_mode not in ["y2b_h2tau", "y2tau_h2b"]:
+        msg = f"Decay mode must be either 'y2b_h2tau' or 'y2tau_h2b', got {decay_mode}"
+        logger.critical(msg)
+        raise ValueError(msg)
+
+    # Raise exception if parity is not 0, 1, or `None`
+    if event_parity not in [0, 1, None]:
+        msg = f"Event parity must be either 0, 1 or `None`, got {event_parity}"
+        logger.critical(msg)
+        raise ValueError(msg)
+
+    # List of data frames which are going to be concatenated
     dfs: list[pd.DataFrame] = []
+
+    # Track time for loading the data frames
+    start = time()
+
     for output_class in output_classes:
-        logger.info(f"Loading data frame for output class {output_class.name}")
-        # If this is the signal class, only load events for the current decay mode
+        # Load the data frame from the preprocessed HDF5 file
         df = pd.read_hdf(
             data_frame_dir / f"{output_class.name}.h5",
             key="ntuple",
         )
+
+        # If this is a signal output class, filter the data frame for the given
+        # decay mode
         if output_class.is_signal:
+            logger.debug(
+                f"Select signal events for decay mode {decay_mode} in data "
+                + f" frame for class {output_class.name}"
+            )
             df = df.loc[df["decay_mode"] == decay_mode]
+
+        # Filter for event parity if it has been set in the function call
+        if event_parity is not None:
+            logger.debug(
+                f"Filter events for event parity {event_parity} in data frame "
+                + f"for class {output_class.name}"
+            )
+            df = df.loc[df["event"] % 2 == event_parity]
+
         dfs.append(df)
 
-    # List of all data frames that are loaded. The data frames are concatenated
-    # to a single data frame later.
-    df = pd.concat(dfs, ignore_index=True)
+        # Log information about the loaded data frame
+        logger.info(f"Loaded data frame for output class {output_class.name}")
 
-    return df
+    # Concatenate the data frames and shuffle the events
+    df = pd.concat(dfs, axis=0).sample(frac=1.0).reset_index(drop=True)
 
+    # Stop time tracking
+    stop = time()
 
-def _filter_event_parity(
-    df: pd.DataFrame,
-    event_parity: int,
-):
-    # Raise exception if parity is not 0 or 1
-    if event_parity not in [0, 1]:
-        msg = f"Event parity must be either 0 or 1, got {event_parity}"
-        logger.critical(msg)
-        raise ValueError(msg)
-
-    # Filter events for given event parity
-    n_events_before = len(df)
-    df = df.loc[df["event"] % 2 == event_parity]
-
-    # Log reduction of the data frame
-    n_events_after = len(df)
-    frac = round(n_events_after / n_events_before * 100, 2)
+    # Log information about data frame loader
+    n_events = len(df)
+    mem = round(df.memory_usage().sum() / (1024**2), 2)
+    delta = round(stop - start, 2)
     logger.debug(
-        f"Filtered data frame for events with parity {event_parity}, resulting "
-        + f"in {n_events_after} selected events (efficiency: {frac} %)"
+        f"Loaded data frame with {n_events} events of size {mem} MB in "
+        + f"{delta} s"
     )
 
     return df
