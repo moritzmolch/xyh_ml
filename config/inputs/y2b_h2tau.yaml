@@ -1,0 +1,162 @@
+# -----------------------------------------------------------------------------
+# Input variables
+# -----------------------------------------------------------------------------
+
+variables:
+# -----------------------------------------------------------------------------
+- name: "n_jets"
+  transformation: "none"
+# -----------------------------------------------------------------------------
+- name: "n_bjets"
+  transformation: "none"
+# -----------------------------------------------------------------------------
+- name: "pt_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "pt_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "eta_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "eta_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "phi_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "phi_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "m_vis"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "pt_vis"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "deltaR_ditaupair"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_pt_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_pt_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_eta_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_eta_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_phi_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_phi_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_btag_value_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_btag_value_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_m_inv"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_pt_dijet"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "bpair_deltaR"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jpt_1"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jpt_2"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jeta_1"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jeta_2"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jphi_1"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jphi_2"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jtag_value_1"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "jtag_value_2"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "mjj"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+# - name: "pt_dijet"
+#   transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "met_leptoncorrected"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "metphi_leptoncorrected"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "mt_1"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "mt_2"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "mt_tot"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "m_fastmtt"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "pt_fastmtt"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "eta_fastmtt"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "phi_fastmtt"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "kinfit_chi2_YToBB"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "kinfit_mX_YToBB"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "kinfit_mY_YToBB"
+  transformation: "standard_scaling"
+# -----------------------------------------------------------------------------
+- name: "campaign"
+  transformation: "ordinal_encoding"
+  is_part_of_snapshot: false
+# -----------------------------------------------------------------------------
+- name: "channel"
+  transformation: "ordinal_encoding"
+  is_part_of_snapshot: false
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Input parameters (PNN)
+# -----------------------------------------------------------------------------
+
+parameters:
+# ----------------------------------------------------------------------------
+- name: "m_x"
+  transformation: "ordinal_encoding"
+  fallback_value: -10.0
+  is_part_of_snapshot: false
+# ----------------------------------------------------------------------------
+- name: "m_y"
+  transformation: "ordinal_encoding"
+  fallback_value: -10.0
+  is_part_of_snapshot: false

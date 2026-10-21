@@ -1,0 +1,8 @@
+base_dir: /ceph/mmolch/xyh-bbtautau-crown/bbtautau-kit/data/output/${tags.snapshot_tag}/snapshots/{campaign}/{channel}__{channel}_base
+campaigns:
+- 2024_nano_v15
+- 2025_nano_v15
+channels:
+- et
+- mt
+- tt

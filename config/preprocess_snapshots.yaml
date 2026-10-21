@@ -1,0 +1,23 @@
+# -----------------------------------------------------------------------------
+# Default configuration for the snapshot preprocessing
+# -----------------------------------------------------------------------------
+
+defaults:
+- base/mode@mode
+- base/tags@tags
+- base/artifacts@artifacts
+- inputs: y2b_h2tau
+- base/outputs@outputs
+- base/data_source@data_source
+- _self_
+
+# -----------------------------------------------------------------------------
+# Hydra configuration
+# -----------------------------------------------------------------------------
+
+hydra:
+  run:
+    dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+  verbose: true

@@ -5,3 +5,4 @@ mlflow
 numpy
 pandas
 pydantic
+hydra-core>=1.3,<2
