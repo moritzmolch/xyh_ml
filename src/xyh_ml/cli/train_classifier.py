@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder, StandardScaler
+from torch.utils.data import TensorDataset
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.cli.model import MultiLayerPerceptron
@@ -45,7 +46,7 @@ def load_data_frame(
     decay_mode: str,
     output_classes: list[OutputClass],
     event_parity: int | None = None,
-):
+) -> pd.DataFrame:
     """
     Load the data frame from the preprocessed HDF5 files.
 
@@ -206,7 +207,7 @@ def reweight_by_group(
     group: str | list[str],
     weight_name: str,
     mask: np.ndarray | None = None,
-):
+) -> pd.DataFrame:
     """
     Reweight events in the data frame such that the sum of weights for each
     group is equal to the mean sum of weights over all groups.
@@ -282,7 +283,7 @@ def reweight_by_group(
 def derive_transformations(
     df: pd.DataFrame,
     variables: list[Variable],
-):
+) -> dict[str, dict[str, Any]]:
     """
     Derive variable transformations on an input data frame and return a
     dictionary of the fitted transformation objects.
@@ -345,7 +346,7 @@ def derive_transformations(
 def apply_transformations(
     df: pd.DataFrame,
     transformations: dict[str, dict[str, Any]],
-):
+) -> pd.DataFrame:
     """
     Apply the fitted transformations to the input data frame and return the
     transformed data frame.
@@ -380,33 +381,94 @@ def apply_transformations(
     return df
 
 
-def _prepare_dataset(
+def create_torch_dataset(
     df: pd.DataFrame,
     input_variables: list[Variable],
-    output_variables: list[Variable],
+    input_parameters: list[Variable],
+    output_variable: Variable,
     weight: str,
-    transformations: dict,
-):
+    transformations: dict[str, dict[str, Any]],
+) -> TensorDataset:
+    """
+    Prepare the training dataset by applying transformations and creating torch
+    tensors from the data frame. The dataset is returned as a `TensorDataset`
+    object, which can be used for efficient training and validation of `torch`
+    models.
+
+    Transformations are applied to input and output variables according to the
+    `transformations` dictionary.
+
+    The torch dataset has the following attributes, which are returned in the
+    order specified below:
+    - `x`: Two-dimensional tensor of input variables
+    - `p`: Two-dimensional tensor of input parameters
+    - `y`: Two-dimensional tensor of output targets
+    - `w`: One-dimensional tensor of event weights
+    - `r`: One-dimensional tensor of boolean values indicating whether the
+           event is a background event (`True`).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Data frame to prepare the dataset from.
+
+    input_variables : list[Variable]
+        List of input variables to use for training/evaluation.
+
+    input_parameters : list[Variable]
+        List of input parameters to use for training/evaluation.
+
+    output_variable : Variable
+        Output target variable to use for training/evaluation.
+
+    weight : str
+        Name of the event weight column.
+
+    transformations : dict
+        Dictionary containing the fitted transformation objects and the
+        corresponding variable names. For more information, see the
+        `derive_transformations` function.
+
+    Returns
+    -------
+    TensorDataset
+        Torch dataset containing the input variables, input parameters, output
+        targets, event weights, and background event indicators as torch
+        tensors.
+    """
+
     # Get column names
     input_variable_names = [v.name for v in input_variables]
-    output_variable_names = [v.name for v in output_variables]
-    weight_variable_name = weight
+    input_parameter_names = [v.name for v in input_parameters]
+    output_variable_name = output_variable.name
+    logging.debug(
+        f"Preparing torch dataset with input variables {input_variable_names}, "
+        + f"input parameters {input_parameter_names}, output variable "
+        + f"{output_variable_name}, and weight {weight}"
+    )
 
     # Transform input and output variables for training dataset creation
-    df_trans = _apply_transformations(df, transformations)
+    df_trans = apply_transformations(df, transformations)
 
     # Create torch tensors from transformed data frame
     x = torch.from_numpy(
         df_trans.loc[:, input_variable_names].astype(np.float32).to_numpy()
     ).float()
+    p = torch.from_numpy(
+        df_trans.loc[:, input_parameter_names].astype(np.float32).to_numpy()
+    ).float()
     y = torch.from_numpy(
-        df_trans.loc[:, output_variable_names].astype(np.int64).to_numpy()
+        df_trans.loc[:, [output_variable_name]].astype(np.int64).to_numpy()
     ).long()
     w = torch.from_numpy(
-        df_trans.loc[:, weight_variable_name].astype(np.float32).to_numpy()
+        df_trans.loc[:, weight].astype(np.float32).to_numpy()
     ).float()
+    r = torch.from_numpy(
+        ~df_trans.loc[:, "is_signal"].astype(np.bool_).to_numpy()
+    ).bool()
 
-    dataset = torch.utils.data.TensorDataset(x, y, w)
+    # Create the tensor dataset from the torch tensors
+    dataset = TensorDataset(x, p, y, w, r)
     logger.debug("Created dataset with torch tensor objects from data frame")
 
     return dataset
