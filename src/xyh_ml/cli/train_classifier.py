@@ -4,6 +4,7 @@ import logging
 import pickle
 from pathlib import Path
 from time import time
+from typing import Any
 
 import hydra
 import numpy as np
@@ -278,13 +279,41 @@ def reweight_by_group(
     return df
 
 
-def _setup_transformations(
+def derive_transformations(
     df: pd.DataFrame,
     variables: list[Variable],
 ):
+    """
+    Derive variable transformations on an input data frame and return a
+    dictionary of the fitted transformation objects.
+
+    Currently, `StandardScaler` and `OrdinalEncoder` transformations are
+    supported. Transformations are declared in the `Variable` objects with the
+    `transformation` attribute, which must be empty or set to either
+    `standard_scaling` or `ordinal_encoding`.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Data frame to fit the transformations on.
+
+    variables : list[Variable]
+        List of variables to fit the transformations for.
+
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary containing the fitted transformation objects and the
+        corresponding variable names. The keys are the transformation names and
+        the values are dictionaries with the following keys:
+        - `"transformation"`: The fitted transformation object. The value is
+          either a `StandardScaler` or an `OrdinalEncoder` object.
+        - `"variables"`: List of variable names that the transformation is
+          applied to.
+    """
 
     # Set up the transformations with sklearn preprocessing objects
-    transformations = {
+    transformations: dict[str, dict[str, Any]] = {
         "standard_scaling": {
             "transformation": StandardScaler(),
         },
@@ -296,21 +325,13 @@ def _setup_transformations(
     # Add information about transformed variables to the transformations
     # dictionary
     for transformation, transformation_dict in transformations.items():
-        transformation_dict.update(
-            {
-                "variables": [
-                    v.name
-                    for v in variables
-                    if v.transformation == transformation
-                ]
-            }
-        )
-
-    # Fit the transformations
-    for transformation_dict in transformations.values():
-        # Get the transformation object and the variables to transform
+        # Get the transformation object
         t = transformation_dict["transformation"]
-        v = transformation_dict["variables"]
+
+        # Get the variable names that are going to be transformed with this
+        # transformation
+        v = [v.name for v in variables if v.transformation == transformation]
+        transformation_dict.update({"variables": v})
 
         # Fit the transformation
         t.fit(df[v])
