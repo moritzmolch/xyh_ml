@@ -474,11 +474,33 @@ def create_torch_dataset(
     return dataset
 
 
-def _create_multi_layer_perceptron_model(
+def create_multi_layer_perceptron_model(
     input_size: int,
     output_size: int,
     network: Network,
-):
+) -> MultiLayerPerceptron:
+    """
+    Create a simple multi-layer perceptron model.
+
+    Parameters
+    ----------
+    input_size : int
+        Number of input features.
+
+    output_size : int
+        Number of output classes.
+
+    network : Network
+        Network configuration containing hyperparameter settings of the network
+        architecture.
+
+    Returns
+    -------
+    MultiLayerPerceptron
+        Multi-layer perceptron model with the specified architecture and
+        hyperparameters.
+    """
+
     # Create the model
     model = MultiLayerPerceptron(
         input_size,
