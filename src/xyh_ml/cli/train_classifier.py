@@ -2,7 +2,6 @@ import copy
 import json
 import logging
 import pickle
-from dataclasses import asdict
 from functools import reduce
 from operator import or_
 from pathlib import Path
@@ -259,7 +258,7 @@ def reweight_by_group(
     # Calculate sum of weights for each group and get the average value over
     # all individual group values
     sum_of_weights = df_groups.agg({weight_name: "sum"})
-    mean_sum_of_weights = sum_of_weights.mean()[0]
+    mean_sum_of_weights = sum_of_weights.mean().to_numpy()[0]
     logger.debug(
         f"Sum of weights per group before reweighting:\n{sum_of_weights.to_string()}"
     )
@@ -379,7 +378,7 @@ def apply_transformations(
         v = transformation_dict["variables"]
 
         # Apply transform to the columns
-        df.loc[:, v] = t.transform(df[v])
+        df[v] = t.transform(df[v])
         logger.debug(
             f"Applied transformation {transformation} for variables {v}"
         )
@@ -453,24 +452,32 @@ def create_torch_dataset(
         + f"{output_variable_name}, and weight {weight}"
     )
 
-    # Transform input and output variables for training dataset creation
+    # Transform input and output variables for training dataset creation, leave
+    # the original data frame unchanged
+    df_trans = df.copy()
     df_trans = apply_transformations(df, transformations)
 
     # Create torch tensors from transformed data frame
     x = torch.from_numpy(
-        df_trans.loc[:, input_variable_names].astype(np.float32).to_numpy()
+        df_trans.loc[:, input_variable_names]
+        .astype(np.float32)
+        .to_numpy(copy=True)
     ).float()
     p = torch.from_numpy(
-        df_trans.loc[:, input_parameter_names].astype(np.float32).to_numpy()
+        df_trans.loc[:, input_parameter_names]
+        .astype(np.float32)
+        .to_numpy(copy=True)
     ).float()
     y = torch.from_numpy(
-        df_trans.loc[:, [output_variable_name]].astype(np.int64).to_numpy()
+        df_trans.loc[:, [output_variable_name]]
+        .astype(np.int64)
+        .to_numpy(copy=True)
     ).long()
     w = torch.from_numpy(
-        df_trans.loc[:, weight].astype(np.float32).to_numpy()
+        df_trans.loc[:, weight].astype(np.float32).to_numpy(copy=True)
     ).float()
     r = torch.from_numpy(
-        ~df_trans.loc[:, "is_signal"].astype(np.bool_).to_numpy()
+        ~df_trans.loc[:, "is_signal"].astype(np.bool_).to_numpy(copy=True)
     ).bool()
 
     # Create the tensor dataset from the torch tensors
@@ -597,8 +604,8 @@ def get_unique_input_parameter_combinations(
     mask = reduce(
         or_,
         [
-            unique_parameters.iloc[:, i] != p["fallback_value"]
-            for i, p in enumerate(parameters)
+            unique_parameters.iloc[:, i] != p.fallback_value
+            for i, p in enumerate(parameter_variables)
         ],
     )
     unique_parameters = unique_parameters.loc[mask].reset_index(drop=True)
@@ -674,7 +681,7 @@ def apply_transformations_to_unique_input_parameters(
             t_tmp.mean_, t_tmp.scale_ = mean, scale
 
         # Apply transform to the columns
-        unique_parameters.loc[:, v_overlap] = t_tmp.transform(
+        unique_parameters[v_overlap] = t_tmp.transform(
             unique_parameters[v_overlap]
         )
         logger.debug(
@@ -985,7 +992,7 @@ def dump_config(
 
     # Serialize training configuration in a JSON file
     with output_file.open(mode="w") as f:
-        json.dump(asdict(config), f, default=str, indent=4)
+        json.dump(config, f, default=str, indent=4)
     logger.debug(f"Serialized configuration to {output_file} in JSON format")
 
 
@@ -1077,6 +1084,7 @@ def main(cfg: Config):
         Path(cfg.artifacts.data_frame_dir),
         cfg.mode.decay_mode,
         cfg.outputs.classes,
+        cfg.mode.event_parity,
     )
 
     # Get unique parameter combinations
@@ -1097,6 +1105,15 @@ def main(cfg: Config):
         data_frame,
         train_frac=cfg.dataset.train_frac,
     )
+
+    # Reweight events so that all campaigns and channels have the same sum of
+    # weights
+    for split in data_frames:
+        data_frames[split] = reweight_by_group(
+            data_frames[split],
+            ["campaign", "channel"],
+            train_weight,
+        )
 
     # Reweight events so that all signal hypotheses have the same sum of
     # weights
