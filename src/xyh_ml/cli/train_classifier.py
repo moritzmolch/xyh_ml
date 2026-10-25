@@ -455,7 +455,7 @@ def create_torch_dataset(
     # Transform input and output variables for training dataset creation, leave
     # the original data frame unchanged
     df_trans = df.copy()
-    df_trans = apply_transformations(df, transformations)
+    df_trans = apply_transformations(df_trans, transformations)
 
     # Create torch tensors from transformed data frame
     x = torch.from_numpy(
