@@ -245,12 +245,12 @@ def save_data_frames(
                     df_snapshot["m_y"] = float(match.group(3))
                 else:
                     df_snapshot["decay_mode"] = "none"
-                    df_snapshot["m_x"] = input_parameters_lookup[
-                        "m_x"
-                    ].fallback_value
-                    df_snapshot["m_y"] = input_parameters_lookup[
-                        "m_y"
-                    ].fallback_value
+                    df_snapshot["m_x"] = float(
+                        input_parameters_lookup["m_x"].fallback_value
+                    )
+                    df_snapshot["m_y"] = float(
+                        input_parameters_lookup["m_y"].fallback_value
+                    )
 
                 dfs.append(df_snapshot)
 
