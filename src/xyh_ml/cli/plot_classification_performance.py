@@ -1,13 +1,15 @@
 import logging
 
 import hydra
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.config import Config, OutputClass
+
+sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
 
 INPUT_FILE = (
     PROJECT_DIR
@@ -69,13 +71,18 @@ def _plot_efficiencies(
 
     for j, df_part in enumerate([eff_upper, eff_lower]):
         # Define the x axis positions and set x axis labels to m_y masses
-        x = np.arange(len(df_part)) + 0.5
-        x_labels = [f"{df_part.iloc[i]['m_y']}" for i in range(len(df_part))]
+        df_part_x = df_part.loc[df_part["class"] == output_classes[0].name]
+        x = np.arange(len(df_part_x)) + 0.5
+        x_labels = [
+            f"{df_part_x.iloc[i]['m_y']}" for i in range(len(df_part_x))
+        ]
 
         # Define the y axis positions for the different output classes list of
         # efficiencies for each output class
         y = [
-            df_part[f"eps_{output_class.name}"].to_numpy()
+            df_part.loc[df_part["class"] == output_class.name][
+                "efficiency"
+            ].to_numpy()
             for output_class in output_classes
         ]
 
@@ -92,14 +99,14 @@ def _plot_efficiencies(
             [0]
             + [
                 i + 1
-                for i in range(len(df_part) - 1)
-                if df_part.index[i][0] != df_part.index[i + 1][0]
+                for i in range(len(df_part_x) - 1)
+                if df_part_x.iloc[i]["m_x"] != df_part_x.iloc[i + 1]["m_x"]
             ]
-            + [len(df_part) - 1]
+            + [len(df_part_x) - 1]
         )
         for i, ei in enumerate(edge_index[:-1]):
             ax[j].axvline(ei, color="black", linestyle="dashed", linewidth=1)
-            m_x = df_part.index[ei][0]
+            m_x = int(df_part_x.iloc[i]["m_x"])
             ax[j].text(
                 (ei + edge_index[i + 1]) / 2,
                 0.2,
@@ -190,6 +197,7 @@ def main(cfg: Config):
             df_class = df[df["true_class_index"] == i]
             correct = df_class["predicted_class_index"] == i
             efficiency = correct.sum() / df_class.shape[0]
+            print(output_class.name, df_class.shape[0])
             efficiencies.append(
                 {
                     "campaign": campaign,
@@ -204,7 +212,8 @@ def main(cfg: Config):
     # Convert records into a proper DataFrame for easier analysis and plotting
     efficiencies = pd.DataFrame.from_records(efficiencies)
     efficiencies = efficiencies.set_index(
-        ["campaign", "channel", "m_x", "m_y"]
+        ["m_x", "m_y"],
+        drop=False,
     ).sort_index()
 
     # Plot the efficiencies for each channel and campaign
@@ -226,8 +235,10 @@ def main(cfg: Config):
                 / "output"
                 / "pnn-2026-10-19"
                 / "plots"
-                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__parity{cfg.event_parity}.{ext}"
+                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__parity{cfg.mode.event_parity}.{ext}"
             )
+            if not output_file.parent.exists():
+                output_file.parent.mkdir(parents=True)
             fig.savefig(output_file)
             logger.info(f"Saved efficiency plot to {output_file}")
 
