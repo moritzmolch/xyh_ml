@@ -51,7 +51,8 @@ logger = logging.getLogger(__name__)
 
 def _plot_efficiencies(
     efficiencies: pd.DataFrame,
-    event_parity: int,
+    fold: int,
+    n_folds: int,
     decay_mode: str,
     campaign: str,
     channel: str,
@@ -151,9 +152,9 @@ def _plot_efficiencies(
     plt.subplots_adjust(top=0.88, right=0.85)
 
     # Add title with information about decay mode, campaign, channel, and
-    # training parity
+    # held-out fold
     fig.suptitle(
-        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(Training on event parity {event_parity})"
+        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(Held-out fold {fold} of {n_folds})"
     )
 
     return fig, ax
@@ -222,7 +223,8 @@ def main(cfg: Config):
     ):
         fig, ax = _plot_efficiencies(
             df,
-            cfg.mode.event_parity,
+            cfg.mode.fold,
+            cfg.mode.n_folds,
             cfg.mode.decay_mode,
             campaign,
             channel,
@@ -235,7 +237,7 @@ def main(cfg: Config):
                 / "output"
                 / "pnn-2026-10-19"
                 / "plots"
-                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__parity{cfg.mode.event_parity}.{ext}"
+                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__fold{cfg.mode.fold}of{cfg.mode.n_folds}.{ext}"
             )
             if not output_file.parent.exists():
                 output_file.parent.mkdir(parents=True)

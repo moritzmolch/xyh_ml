@@ -6,7 +6,7 @@ from functools import reduce
 from operator import or_
 from pathlib import Path
 from time import time
-from typing import Any
+from typing import Any, Literal
 
 import hydra
 import numpy as np
@@ -50,15 +50,18 @@ def load_data_frame(
     data_frame_dir: Path,
     decay_mode: str,
     output_classes: list[OutputClass],
-    event_parity: int | None = None,
+    n_folds: int | None = None,
+    fold: int | None = None,
+    fold_selection: Literal["train", "eval"] | None = None,
     channel: str | None = None,
 ) -> DataFrame:
     """
     Load the data frame from the preprocessed HDF5 files.
 
     For signal events, the data frame is filtered for the given `decay_mode`.
-    If `event_parity` is set to 0 or 1, the data frame is filtered for even
-    or odd events. If `channel` is set, the data frame is filtered for that
+    If `fold_selection` is set, the events are assigned to `n_folds` folds
+    based on their event number (`event % n_folds`) and filtered for either
+    the training folds or the held-out evaluation fold. If `channel` is set, the data frame is filtered for that
     analysis channel. The full data frame is loaded otherwise.
 
     The data frame is shuffled before being returned.
@@ -75,9 +78,18 @@ def load_data_frame(
     output_classes : list[OutputClass]
         List of output classes to load the data frames for.
 
-    event_parity : int | None, optional
-        Event parity to filter the events for. Must be either 0, 1, or `None`.
-        If `None`, no filtering is applied. Default is `None`.
+    n_folds : int | None, optional
+        Number of folds the events are split into. Required if
+        `fold_selection` is set. Default is `None`.
+
+    fold : int | None, optional
+        Index of the held-out fold, between 0 and `n_folds - 1`. Required if
+        `fold_selection` is set. Default is `None`.
+
+    fold_selection : {"train", "eval"} | None, optional
+        If `"train"`, keep the events of all folds except `fold`. If `"eval"`,
+        keep only the events of the held-out fold `fold`. If `None`, no
+        filtering is applied. Default is `None`.
 
     channel : str | None, optional
         Analysis channel (`et`, `mt` or `tt`) to filter the events for. If
@@ -92,7 +104,8 @@ def load_data_frame(
     ------
     ValueError
         - If `decay_mode` is not `y2b_h2tau` or `y2tau_h2b`.
-        - If `event_parity` is not 0, 1, or `None`.
+        - If `fold_selection` is not `train`, `eval` or `None`.
+        - If `fold_selection` is set and `n_folds` or `fold` are invalid.
         - If `channel` is not `et`, `mt`, `tt` or `None`.
     """
 
@@ -102,11 +115,23 @@ def load_data_frame(
         logger.critical(msg)
         raise ValueError(msg)
 
-    # Raise exception if parity is not 0, 1, or `None`
-    if event_parity not in [0, 1, None]:
-        msg = f"Event parity must be either 0, 1 or `None`, got {event_parity}"
+    # Raise exception if the fold selection is invalid
+    if fold_selection not in ["train", "eval", None]:
+        msg = f"Fold selection must be 'train', 'eval' or `None`, got {fold_selection}"
         logger.critical(msg)
         raise ValueError(msg)
+    if fold_selection is not None and not (
+        n_folds is not None
+        and fold is not None
+        and n_folds >= 2
+        and 0 <= fold < n_folds
+    ):
+        msg = f"Need n_folds >= 2 and 0 <= fold < n_folds, got n_folds={n_folds}, fold={fold}"
+        logger.critical(msg)
+        raise ValueError(msg)
+
+    # List of data frames which are going to be concatenated
+    dfs: list[DataFrame] = []
 
     # Raise exception if channel is not `et`, `mt`, `tt` or `None`
     if channel not in ["et", "mt", "tt", None]:
@@ -115,9 +140,6 @@ def load_data_frame(
         )
         logger.critical(msg)
         raise ValueError(msg)
-
-    # List of data frames which are going to be concatenated
-    dfs: list[DataFrame] = []
 
     # Track time for loading the data frames
     start = time()
@@ -138,13 +160,15 @@ def load_data_frame(
             )
             df = df.loc[df["decay_mode"] == decay_mode]
 
-        # Filter for event parity if it has been set in the function call
-        if event_parity is not None:
+        # Filter for the training folds or the held-out fold if it has been set
+        # in the function call
+        if fold_selection is not None:
             logger.debug(
-                f"Filter events for event parity {event_parity} in data frame "
-                + f"for class {output_class.name}"
+                f"Select {fold_selection} events for fold {fold} of {n_folds} "
+                + f"in data frame for class {output_class.name}"
             )
-            df = df.loc[df["event"] % 2 == event_parity]
+            in_fold = df["event"] % n_folds == fold
+            df = df.loc[in_fold if fold_selection == "eval" else ~in_fold]
 
         # Filter for analysis channel if it has been set in the function call
         if channel is not None:
@@ -1107,7 +1131,9 @@ def main(cfg: Config):
         Path(cfg.artifacts.data_frame_dir),
         cfg.mode.decay_mode,
         cfg.outputs.classes,
-        cfg.mode.event_parity,
+        cfg.mode.n_folds,
+        cfg.mode.fold,
+        "train",
         cfg.mode.channel,
     )
 

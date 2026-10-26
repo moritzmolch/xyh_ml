@@ -1,3 +1,4 @@
 decay_mode: y2b_h2tau
-event_parity: 0
+n_folds: 5
+fold: 0
 channel: et
