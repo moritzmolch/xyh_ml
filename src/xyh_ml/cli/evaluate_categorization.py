@@ -38,13 +38,14 @@ PARAMETER_SAMPLING_SEED = 583
 def filter_and_set_evaluation_parameters(
     data_frame: DataFrame,
     unique_parameter_values: DataFrame,
+    n_folds: int,
     n_samples_per_category: int | None = None,
 ):
     # Store reduction rate of the sampled events to be able to rescale it to
-    # the original cross section. Without sampling, the reduction rate is 0.5
-    # because of the even-odd parity split of the events.
+    # the original cross section. Without sampling, the reduction rate is
+    # 1 / n_folds because only the held-out fold is evaluated.
     reduction_rates = {
-        category: 0.5 for category in data_frame["class"].unique()
+        category: 1 / n_folds for category in data_frame["class"].unique()
     }
 
     # Sample a few events from all categories to reduce evaluation time if
@@ -127,6 +128,7 @@ def predict_for_parameters(
     weight: str,
     transformations: dict,
     unique_parameter_values: DataFrame,
+    n_folds: int,
     n_samples_per_category: int | None = None,
 ):
     # Filter signal events for values that the network is going to be evaluated
@@ -134,6 +136,7 @@ def predict_for_parameters(
     data_frame = filter_and_set_evaluation_parameters(
         data_frame,
         unique_parameter_values,
+        n_folds,
         n_samples_per_category=n_samples_per_category,
     )
 
@@ -189,7 +192,10 @@ def main(cfg: Config):
         Path(cfg.artifacts.data_frame_dir),
         cfg.mode.decay_mode,
         cfg.outputs.classes,
-        (cfg.mode.event_parity + 1) % 2,
+        cfg.mode.n_folds,
+        cfg.mode.fold,
+        "eval",
+        cfg.mode.channel,
     )
 
     # Use the physics weight as evaluation weight
@@ -219,6 +225,7 @@ def main(cfg: Config):
         eval_weight,
         transformations,
         unique_parameters,
+        cfg.mode.n_folds,
         n_samples_per_category=10_000,
     )
 

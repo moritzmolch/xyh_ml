@@ -9,7 +9,7 @@ import hydra
 from hydra.core.config_store import ConfigStore
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.config.dataclasses import Config, yield_base_dirs
+from xyh_ml.config import Config, yield_base_dirs
 from xyh_ml.data.snapshots import group_snapshots, save_data_frames
 
 # Set up logging

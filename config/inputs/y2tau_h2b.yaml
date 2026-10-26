@@ -127,22 +127,19 @@ variables:
 - name: "phi_fastmtt"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_chi2_YToTauTau"
-  transformation: "standard_scaling"
+# - name: "kinfit_chi2_YToTauTau"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_mX_YToTauTau"
-  transformation: "standard_scaling"
+# - name: "kinfit_mX_YToTauTau"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_mY_YToTauTau"
-  transformation: "standard_scaling"
+# - name: "kinfit_mY_YToTauTau"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "era"
   transformation: "ordinal_encoding"
   is_part_of_snapshot: false
 # -----------------------------------------------------------------------------
-- name: "channel"
-  transformation: "ordinal_encoding"
-  is_part_of_snapshot: false
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------

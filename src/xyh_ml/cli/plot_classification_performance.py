@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import hydra
 import matplotlib.pyplot as plt
@@ -10,18 +11,6 @@ from xyh_ml import PROJECT_DIR
 from xyh_ml.config import Config, OutputClass
 
 sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
-
-INPUT_FILE = (
-    PROJECT_DIR
-    / "data"
-    / "output"
-    / "pnn-2026-10-19"
-    / "predictions"
-    / "y2b_h2tau"
-    / "0"
-    / "predictions_y2b_h2tau.h5"
-)
-
 
 DECAY_MODE_LABELS = {
     "y2b_h2tau": r"$\text{X} \to \text{Y}(\text{b}\text{b})\text{H}(\tau\tau)$",
@@ -51,7 +40,8 @@ logger = logging.getLogger(__name__)
 
 def _plot_efficiencies(
     efficiencies: pd.DataFrame,
-    event_parity: int,
+    fold: int,
+    n_folds: int,
     decay_mode: str,
     campaign: str,
     channel: str,
@@ -151,9 +141,9 @@ def _plot_efficiencies(
     plt.subplots_adjust(top=0.88, right=0.85)
 
     # Add title with information about decay mode, campaign, channel, and
-    # training parity
+    # held-out fold
     fig.suptitle(
-        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(Training on event parity {event_parity})"
+        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(Held-out fold {fold} of {n_folds})"
     )
 
     return fig, ax
@@ -165,8 +155,13 @@ def _plot_efficiencies(
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Load the predictions the data frame
-    data_frame = pd.read_hdf(INPUT_FILE)
+    # Load the predictions data frame written by the categorization step for
+    # the selected decay mode, fold and channel
+    input_file = (
+        Path(cfg.artifacts.predictions_dir)
+        / f"predictions_{cfg.mode.decay_mode}.h5"
+    )
+    data_frame = pd.read_hdf(input_file)
 
     # Get the output variable name
     output_variable_name = cfg.outputs.variables[0].name
@@ -222,7 +217,8 @@ def main(cfg: Config):
     ):
         fig, ax = _plot_efficiencies(
             df,
-            cfg.mode.event_parity,
+            cfg.mode.fold,
+            cfg.mode.n_folds,
             cfg.mode.decay_mode,
             campaign,
             channel,
@@ -233,9 +229,9 @@ def main(cfg: Config):
                 PROJECT_DIR
                 / "data"
                 / "output"
-                / "pnn-2026-10-19"
+                / cfg.tags.training_tag
                 / "plots"
-                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__parity{cfg.mode.event_parity}.{ext}"
+                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__fold{cfg.mode.fold}of{cfg.mode.n_folds}.{ext}"
             )
             if not output_file.parent.exists():
                 output_file.parent.mkdir(parents=True)

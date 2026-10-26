@@ -1,3 +1,3 @@
 data_frame_dir: /ceph/mmolch/xyh-bbtautau-crown/xyh_ml/${tags.training_tag}/${tags.snapshot_tag}/${mode.decay_mode}/data_frames
-training_dir: data/output/${tags.training_tag}/classifier/${mode.decay_mode}/${mode.event_parity}
-predictions_dir: data/output/${tags.training_tag}/predictions/${mode.decay_mode}/${mode.event_parity}
+training_dir: data/output/${tags.training_tag}/classifier/${mode.decay_mode}/fold${mode.fold}of${mode.n_folds}/${mode.channel}
+predictions_dir: data/output/${tags.training_tag}/predictions/${mode.decay_mode}/fold${mode.fold}of${mode.n_folds}/${mode.channel}
