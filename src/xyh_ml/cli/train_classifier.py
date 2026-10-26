@@ -51,13 +51,15 @@ def load_data_frame(
     decay_mode: str,
     output_classes: list[OutputClass],
     event_parity: int | None = None,
+    channel: str | None = None,
 ) -> DataFrame:
     """
     Load the data frame from the preprocessed HDF5 files.
 
     For signal events, the data frame is filtered for the given `decay_mode`.
     If `event_parity` is set to 0 or 1, the data frame is filtered for even
-    or odd events. The full data frame is loaded otherwise.
+    or odd events. If `channel` is set, the data frame is filtered for that
+    analysis channel. The full data frame is loaded otherwise.
 
     The data frame is shuffled before being returned.
 
@@ -77,6 +79,10 @@ def load_data_frame(
         Event parity to filter the events for. Must be either 0, 1, or `None`.
         If `None`, no filtering is applied. Default is `None`.
 
+    channel : str | None, optional
+        Analysis channel (`et`, `mt` or `tt`) to filter the events for. If
+        `None`, no filtering is applied. Default is `None`.
+
     Returns
     -------
     DataFrame
@@ -87,6 +93,7 @@ def load_data_frame(
     ValueError
         - If `decay_mode` is not `y2b_h2tau` or `y2tau_h2b`.
         - If `event_parity` is not 0, 1, or `None`.
+        - If `channel` is not `et`, `mt`, `tt` or `None`.
     """
 
     # Raise exception if decay mode is not `y2b_h2tau` or `y2tau_h2b`
@@ -98,6 +105,14 @@ def load_data_frame(
     # Raise exception if parity is not 0, 1, or `None`
     if event_parity not in [0, 1, None]:
         msg = f"Event parity must be either 0, 1 or `None`, got {event_parity}"
+        logger.critical(msg)
+        raise ValueError(msg)
+
+    # Raise exception if channel is not `et`, `mt`, `tt` or `None`
+    if channel not in ["et", "mt", "tt", None]:
+        msg = (
+            f"Channel must be either 'et', 'mt', 'tt' or `None`, got {channel}"
+        )
         logger.critical(msg)
         raise ValueError(msg)
 
@@ -130,6 +145,14 @@ def load_data_frame(
                 + f"for class {output_class.name}"
             )
             df = df.loc[df["event"] % 2 == event_parity]
+
+        # Filter for analysis channel if it has been set in the function call
+        if channel is not None:
+            logger.debug(
+                f"Filter events for channel {channel} in data frame "
+                + f"for class {output_class.name}"
+            )
+            df = df.loc[df["channel"] == channel]
 
         dfs.append(df)
 
@@ -1085,6 +1108,7 @@ def main(cfg: Config):
         cfg.mode.decay_mode,
         cfg.outputs.classes,
         cfg.mode.event_parity,
+        cfg.mode.channel,
     )
 
     # Get unique parameter combinations
@@ -1106,12 +1130,11 @@ def main(cfg: Config):
         train_frac=cfg.dataset.train_frac,
     )
 
-    # Reweight events so that all campaigns and channels have the same sum of
-    # weights
+    # Reweight events so that all campaigns have the same sum of weights
     for split in data_frames:
         data_frames[split] = reweight_by_group(
             data_frames[split],
-            ["campaign", "channel"],
+            "campaign",
             train_weight,
         )
 

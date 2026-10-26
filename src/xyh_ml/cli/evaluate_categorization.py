@@ -190,6 +190,7 @@ def main(cfg: Config):
         cfg.mode.decay_mode,
         cfg.outputs.classes,
         (cfg.mode.event_parity + 1) % 2,
+        cfg.mode.channel,
     )
 
     # Use the physics weight as evaluation weight

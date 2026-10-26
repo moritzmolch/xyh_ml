@@ -20,12 +20,12 @@ Machine learning for the X → YH → bbττ analysis (KIT, CMS). The package `x
 
 **Pipeline** (each stage is a script in `src/xyh_ml/cli/`, paired with a top-level YAML in `config/`):
 1. `preprocess_snapshots` (`config/preprocess_snapshots.yaml`) — reads ROOT snapshots (per campaign/channel from `data_source`), writes HDF5 data frames under `artifacts.data_frame_dir`.
-2. `train_classifier` (`config/train_classifier.yaml`) — trains a parametrized MLP (`cli/model.py`, `MultiLayerPerceptron`) separately per `decay_mode` and `event_parity` (even/odd event split; the opposite parity is used for evaluation). Outputs go to `artifacts.training_dir`.
+2. `train_classifier` (`config/train_classifier.yaml`) — trains a parametrized MLP (`cli/model.py`, `MultiLayerPerceptron`) separately per `decay_mode`, `event_parity` and analysis `channel` (et/mt/tt) (even/odd event split; the opposite parity is used for evaluation). Outputs go to `artifacts.training_dir`.
 3. `evaluate_categorization` / `plot_classification_performance` — categorization over the evaluation fold (predictions in `predictions_dir`) and plots. `cli/evaluate_classifier.py` is obsolete; ignore it.
 
-**Workflow** (run from the repo root; repeat per `mode.decay_mode` ∈ {`y2b_h2tau`, `y2tau_h2b`, also select `inputs=<same>`} and per `mode.event_parity` ∈ {0, 1}; `tags.snapshot_tag` / `tags.training_tag` default to `config/base/tags.yaml`):
+**Workflow** (run from the repo root; repeat per `mode.decay_mode` ∈ {`y2b_h2tau`, `y2tau_h2b`, also select `inputs=<same>`} per `mode.event_parity` ∈ {0, 1} and per `mode.channel` ∈ {et, mt, tt}; `tags.snapshot_tag` / `tags.training_tag` default to `config/base/tags.yaml`):
 ```bash
-M="mode.decay_mode=y2b_h2tau inputs=y2b_h2tau"
+M="mode.decay_mode=y2b_h2tau inputs=y2b_h2tau mode.channel=et"
 # 1. ROOT snapshots -> HDF5 data frames (parity-independent, once per decay mode)
 python -m xyh_ml.cli.preprocess_snapshots $M
 # 2. Train on events of parity P; writes config/transformations.pkl/metrics.json/checkpoints.pt to training_dir

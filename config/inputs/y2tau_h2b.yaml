@@ -140,9 +140,6 @@ variables:
   transformation: "ordinal_encoding"
   is_part_of_snapshot: false
 # -----------------------------------------------------------------------------
-- name: "channel"
-  transformation: "ordinal_encoding"
-  is_part_of_snapshot: false
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------

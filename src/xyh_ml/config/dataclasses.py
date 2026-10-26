@@ -58,6 +58,7 @@ class DataSource:
 class Mode:
     decay_mode: str
     event_parity: int
+    channel: str
 
 
 @dataclass

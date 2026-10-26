@@ -1,2 +1,3 @@
 decay_mode: y2b_h2tau
 event_parity: 0
+channel: et
