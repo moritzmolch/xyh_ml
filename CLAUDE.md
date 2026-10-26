@@ -36,7 +36,7 @@ python -m xyh_ml.cli.evaluate_categorization $M mode.fold=0
 python -m xyh_ml.cli.plot_classification_performance $M mode.fold=0
 ```
 
-Each step consumes the previous step's files, so run in order. `plot_classification_performance` hardcodes `INPUT_FILE` and the plot output path (`pnn-2026-10-19`, `y2b_h2tau`, fold `0`) in the module; edit those constants when changing tag/mode.
+Each step consumes the previous step's files, so run in order. `plot_classification_performance` reads the predictions file of the selected tag/mode/fold/channel from `predictions_dir`, so run it per channel with the same overrides.
 
 **Configuration** is Hydra composition: top-level `config/*.yaml` lists defaults from `config/base/*.yaml` (mode, tags, artifacts, outputs, data_source, dataset, network, training) plus `config/inputs/<decay_mode>.yaml` (input variables, parameters, output classes, with per-variable `transformation` and `fallback_value`). Typed dataclasses mirroring this structure live in `src/xyh_ml/config/dataclasses.py` (`Config`, `Variable`, `OutputClass`, `Network`, `Training`, ...); `config/util.py` converts the Hydra config into them. When adding a config field, change the YAML and the dataclass together. Hydra runs write to `output/hydra/<job>/<timestamp>` and do not `chdir`; `PROJECT_DIR` (`xyh_ml/__init__.py`) is the repo root used to locate `config/`.
 

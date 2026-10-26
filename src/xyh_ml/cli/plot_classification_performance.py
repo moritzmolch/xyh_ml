@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import hydra
 import matplotlib.pyplot as plt
@@ -10,18 +11,6 @@ from xyh_ml import PROJECT_DIR
 from xyh_ml.config import Config, OutputClass
 
 sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
-
-INPUT_FILE = (
-    PROJECT_DIR
-    / "data"
-    / "output"
-    / "pnn-2026-10-19"
-    / "predictions"
-    / "y2b_h2tau"
-    / "0"
-    / "predictions_y2b_h2tau.h5"
-)
-
 
 DECAY_MODE_LABELS = {
     "y2b_h2tau": r"$\text{X} \to \text{Y}(\text{b}\text{b})\text{H}(\tau\tau)$",
@@ -166,8 +155,13 @@ def _plot_efficiencies(
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Load the predictions the data frame
-    data_frame = pd.read_hdf(INPUT_FILE)
+    # Load the predictions data frame written by the categorization step for
+    # the selected decay mode, fold and channel
+    input_file = (
+        Path(cfg.artifacts.predictions_dir)
+        / f"predictions_{cfg.mode.decay_mode}.h5"
+    )
+    data_frame = pd.read_hdf(input_file)
 
     # Get the output variable name
     output_variable_name = cfg.outputs.variables[0].name
@@ -235,7 +229,7 @@ def main(cfg: Config):
                 PROJECT_DIR
                 / "data"
                 / "output"
-                / "pnn-2026-10-19"
+                / cfg.tags.training_tag
                 / "plots"
                 / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__fold{cfg.mode.fold}of{cfg.mode.n_folds}.{ext}"
             )
