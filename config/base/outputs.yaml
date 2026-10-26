@@ -19,7 +19,7 @@ classes:
   is_signal: true
 # -----------------------------------------------------------------------------
 - name: "t_tt"
-  label: "$\\text{t}+$\\text{t}\\bar{\\text{t}}$"
+  label: "$\\text{t}+\\text{t}\\bar{\\text{t}}$"
   file_basenames:
   - "single_t_rem.*nominal"
   - "single_t_tautau.*nominal"
