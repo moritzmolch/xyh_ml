@@ -127,14 +127,14 @@ variables:
 - name: "phi_fastmtt"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_chi2_YToBB"
-  transformation: "standard_scaling"
+# - name: "kinfit_chi2_YToBB"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_mX_YToBB"
-  transformation: "standard_scaling"
+# - name: "kinfit_mX_YToBB"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "kinfit_mY_YToBB"
-  transformation: "standard_scaling"
+# - name: "kinfit_mY_YToBB"
+#   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "campaign"
   transformation: "ordinal_encoding"
