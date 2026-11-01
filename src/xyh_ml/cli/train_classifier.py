@@ -885,7 +885,7 @@ def train_and_validate(
     )
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val,
-        batch_size=len(dataset_val),
+        batch_size=batch_size,
         shuffle=False,
         num_workers=data_loader_num_workers,
         pin_memory=data_loader_pin_memory,
@@ -994,16 +994,17 @@ def train_and_validate(
             metrics.setdefault("val_loss", []).append(loss.item())
 
             # Log results
-            logger.debug(
-                "Validation metrics "
-                + "  /  ".join(
-                    [
-                        f"{name}: {metric_list[-1]}"
-                        for name, metric_list in metrics.items()
-                        if name.startswith("val")
-                    ]
+            if batch % n_steps_logging == 0:
+                logger.debug(
+                    "Validation metrics "
+                    + "  /  ".join(
+                        [
+                            f"{name}: {metric_list[-1]}"
+                            for name, metric_list in metrics.items()
+                            if name.startswith("val")
+                        ]
+                    )
                 )
-            )
 
         # Add model checkpoint after epoch
         checkpoints.append(
