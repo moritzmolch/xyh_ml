@@ -1184,6 +1184,14 @@ def main(cfg: Config):
             train_weight,
         )
 
+    # Reweight events so that signal : background ratio is 1 : 1
+    for split in data_frames:
+        data_frames[split] = reweight_by_group(
+            data_frames[split],
+            "is_signal",
+            train_weight,
+        )
+
     # Fit transformations to preprocess input and output variables on the
     # training dataset
     transformations = derive_transformations(
@@ -1195,9 +1203,9 @@ def main(cfg: Config):
     # tensors from the data frame. Create separate datasets for training and
     # validation.
     datasets = {}
-    for split, data_frame in data_frames.items():
+    for split, df_split in data_frames.items():
         datasets[split] = create_torch_dataset(
-            data_frame,
+            df_split,
             cfg.inputs.variables,
             cfg.inputs.parameters,
             cfg.outputs.variables[0],
