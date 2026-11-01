@@ -60,9 +60,10 @@ def load_data_frame(
 
     For signal events, the data frame is filtered for the given `decay_mode`.
     If `fold_selection` is set, the events are assigned to `n_folds` folds
-    based on their event number (`event % n_folds`) and filtered for either
-    the training folds or the held-out evaluation fold. If `channel` is set, the data frame is filtered for that
-    analysis channel. The full data frame is loaded otherwise.
+    based on their event number (`event % n_folds`) and filtered for either the
+    training folds or the held-out evaluation fold. If `channel` is set, the
+    data frame is filtered for that analysis channel. The full data frame is
+    loaded otherwise.
 
     The data frame is shuffled before being returned.
 
