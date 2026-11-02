@@ -1,11 +1,11 @@
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Literal
 
 import lightning
-import pandas as pd
 import torch
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from torch import Generator, Tensor
@@ -48,7 +48,10 @@ class PNNLightning(lightning.LightningModule):
         # Internal store to track individual losses during epoch for proper
         # averaging
         # Format: {<loop_type>: [(batch_loss, batch_weight_sum), ...], ...}
-        self._epoch_losses = {}
+        self._epoch_losses = {
+            "train": [],
+            "val": [],
+        }
 
     def forward(self, x: Tensor) -> Tensor:
         # Forward input to model
@@ -226,15 +229,16 @@ class PNNLightning(lightning.LightningModule):
         losses_and_weight_sums = self._epoch_losses[loop_type]
         avg_loss = 0
         total_weight_sum = 0
-        for loss, weight_sum in zip(*losses_and_weight_sums):
+        for loss, weight_sum in losses_and_weight_sums:
             avg_loss += loss * weight_sum
             total_weight_sum += weight_sum
         avg_loss /= total_weight_sum
 
         # Add average loss to central logger
         self.logger.log_metrics(
-            f"{loop_type}_loss",
-            avg_loss,
+            metrics={
+                f"{loop_type}_loss_weighted": avg_loss,
+            },
             step=self.global_step,
         )
 
@@ -281,7 +285,9 @@ def train_and_validate(
     unique_parameters: Tensor,
     training: Training,
     device: str,
-    n_steps_logging: int = 25,
+    checkpoint_output_file: Path,
+    metrics_output_file: Path,
+    log_every_n_steps: int = 10,
 ) -> lightning.LightningModule:
     """
     Training and validation loop for the model.
@@ -429,6 +435,7 @@ def train_and_validate(
             accelerator=device,
             devices=1,
             enable_progress_bar=True,
+            log_every_n_steps=log_every_n_steps,
         )
         trainer.fit(
             lightning_module,
@@ -436,18 +443,27 @@ def train_and_validate(
             val_dataloaders=data_loader_val,
         )
 
+        # Move lightning module back to CPU
+        lightning_module = lightning_module.cpu()
+
         # Load the best model checkpoint after training
         best_model_path = checkpoint_callback.best_model_path
-        if best_model_path:
-            logger.debug(
-                f"Loading best model from checkpoint: {best_model_path}"
+        if not best_model_path:
+            logger.critical(
+                f"Could not find the best model checkpoint after training. Look into {tmp_results_dir}"
             )
-            lightning_module.load_from_checkpoint(best_model_path)
+        else:
+            if not checkpoint_output_file.parent.exists():
+                checkpoint_output_file.parent.mkdir(parents=True)
+            shutil.copy2(best_model_path, checkpoint_output_file)
 
         # Load the logs after training
-        logs_path = training_logger.log_dir / "metrics.csv"
-        if logs_path.exists():
-            logger.debug(f"Loading training logs from: {logs_path}")
-            logs = pd.read_csv(logs_path)
-
-    return lightning_module, logs
+        logs_path = os.path.join(training_logger.log_dir, "metrics.csv")
+        if not os.path.exists(logs_path):
+            logger.critical(
+                f"Could not find the metrics logging file after training. Look into {tmp_results_dir}"
+            )
+        else:
+            if not metrics_output_file.parent.exists():
+                metrics_output_file.parent.mkdir(parents=True)
+            shutil.copy2(logs_path, metrics_output_file)
