@@ -403,6 +403,7 @@ def train_and_validate(
         )
 
         # Create the PyTorch Lightning trainer and run the training
+        device = "gpu" if torch.cuda.is_available() else "cpu"
         trainer = lightning.Trainer(
             max_epochs=max_epochs,
             callbacks=[
@@ -411,6 +412,8 @@ def train_and_validate(
             ],
             logger=training_logger,
             accelerator=device,
+            devices=1,
+            enable_progress_bar=True,
         )
         trainer.fit(
             lightning_module,
