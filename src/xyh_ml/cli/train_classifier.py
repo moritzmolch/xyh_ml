@@ -615,6 +615,83 @@ def cross_entropy_loss(
     return loss
 
 
+def focal_loss(
+    prediction: Tensor,
+    target: Tensor,
+    weight: Tensor,
+    *,
+    gamma: float,
+) -> Tensor:
+    """
+    Custom focal loss function that calculates the weighted mean of
+    focal losses for a batch of events.
+
+    Parameters
+    ----------
+    prediction : Tensor
+        Predicted class probabilities for each event in the batch. Shape is
+        (batch_size, num_classes).
+
+    target : Tensor
+        True class labels for each event in the batch. Shape is (batch_size,).
+
+    weight : Tensor
+        Event weights for each event in the batch. Shape is (batch_size,).
+
+    gamma : float
+        Focusing parameter for the focal loss. Must be non-negative.
+
+    Returns
+    -------
+    Tensor
+        Weighted mean of focal losses for the batch.
+    """
+
+    # Get the single losses for each event
+    ce_elements = torch.nn.functional.cross_entropy(
+        prediction,
+        target,
+        reduction="none",
+    )
+    p_t = torch.exp(-ce_elements)
+    elements = torch.pow(1 - p_t, gamma) * ce_elements
+
+    # Calculate weighted sum
+    loss = torch.sum(weight * elements) / torch.sum(weight)
+
+    return loss
+
+
+def get_loss_fn(loss_fn: str, loss_kwargs: dict[str, Any]):
+    """
+    Get the loss function based on its name and keyword arguments.
+
+    Parameters
+    ----------
+    loss_fn : str
+        Name of the loss function.
+
+    loss_kwargs : dict[str, Any]
+        Keyword arguments for the loss function.
+
+    Returns
+    -------
+    callable
+        The loss function.
+    """
+    if loss_fn == "cross_entropy":
+        return cross_entropy_loss
+    elif loss_fn == "focal":
+        required = {"gamma"}
+        if set(loss_kwargs.keys()) != required:
+            raise ValueError(
+                f"Focal loss needs the following keyword arguments: {required}"
+            )
+        return partial(focal_loss, **loss_kwargs)
+    else:
+        raise ValueError(f"Unknown loss function: {loss_fn}")
+
+
 def get_unique_input_parameter_combinations(
     df: DataFrame,
     parameter_variables: list[Variable],
@@ -868,6 +945,9 @@ def train_and_validate(
     data_loader_num_workers = training.data_loader_num_workers
     data_loader_pin_memory = training.data_loader_pin_memory
 
+    # Get the loss function
+    loss_fn = get_loss_fn(training.loss_fn, training.loss_fn_kwargs)
+
     # Create the optimizer
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -935,7 +1015,7 @@ def train_and_validate(
 
             # Get the network prediction and calculate the loss
             pred = model(torch.cat((x, p), dim=-1))
-            loss = cross_entropy_loss(pred, y.view(-1), w)
+            loss = loss_fn(pred, y.view(-1), w)
 
             # Perform backpropagation
             loss.backward()
@@ -984,7 +1064,7 @@ def train_and_validate(
             # Get the network prediction and calculate the loss
             with torch.no_grad():
                 pred = model(torch.cat((x, p), dim=-1))
-                loss = cross_entropy_loss(pred, y.view(-1), w)
+                loss = loss_fn(pred, y.view(-1), w)
 
             # Track validation metrics
             metrics.setdefault("val_step", []).append(step)

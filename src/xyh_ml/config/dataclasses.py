@@ -81,6 +81,8 @@ class Training:
     batch_size: int
     optimizer_learning_rate: float
     optimizer_weight_decay: float
+    loss_fn: str
+    loss_kwargs: dict[str, Any] = field(default_factory=dict)
     data_loader_num_workers: int
     data_loader_pin_memory: bool
 
