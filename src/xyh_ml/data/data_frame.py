@@ -1,4 +1,6 @@
 import logging
+from functools import reduce
+from operator import or_
 from pathlib import Path
 from time import time
 from typing import Literal
@@ -7,7 +9,7 @@ import pandas as pd
 from pandas import DataFrame
 from sklearn.model_selection import train_test_split
 
-from xyh_ml.config.dataclasses import OutputClass
+from xyh_ml.config.dataclasses import OutputClass, Variable
 from xyh_ml.constants import TRAIN_TEST_SPLIT_SEED
 
 # Set up logging
@@ -221,3 +223,52 @@ def train_val_split(
         "train": df_train,
         "val": df_val,
     }
+
+
+def get_unique_input_parameter_combinations(
+    df: DataFrame,
+    parameter_variables: list[Variable],
+) -> DataFrame:
+    """
+    Get unique combinations of input parameter values from the data frame.
+
+    Parameters
+    ----------
+
+    df : DataFrame
+        Data frame containing the input parameter values.
+
+    parameter_variables : list[Variable]
+        List of input parameter variables to get unique values for.
+
+    Returns
+    -------
+    DataFrame
+        Data frame containing unique combinations of input parameter values.
+    """
+
+    # Create list of parameter names
+    parameter_names = [p.name for p in parameter_variables]
+
+    logger.debug(
+        "Getting unique combinations of input parameter values for parameters "
+        + f"{parameter_names}"
+    )
+
+    # Get unique values of the parameters in the data frame
+    unique_parameters = df[parameter_names].drop_duplicates()
+
+    # Remove values uniquely composed of fallback values
+    mask = reduce(
+        or_,
+        [
+            unique_parameters.iloc[:, i] != p.fallback_value
+            for i, p in enumerate(parameter_variables)
+        ],
+    )
+    unique_parameters = unique_parameters.loc[mask].reset_index(drop=True)
+    logger.debug(
+        f"Found {len(unique_parameters)} unique combinations of input parameter values"
+    )
+
+    return unique_parameters

@@ -2,17 +2,12 @@ import copy
 import json
 import logging
 import pickle
-from functools import reduce
-from operator import or_
 from pathlib import Path
 from typing import Any
 
 import hydra
 import numpy as np
-import pandas as pd
 import torch
-from pandas import DataFrame
-from sklearn.preprocessing import StandardScaler
 from torch import Tensor
 from torch.nn import Module
 from torch.utils.data import TensorDataset
@@ -21,16 +16,21 @@ from xyh_ml import PROJECT_DIR
 from xyh_ml.config import (
     Config,
     Training,
-    Variable,
 )
-from xyh_ml.data.data_frame import load_data_frame, train_val_split
+from xyh_ml.data.data_frame import (
+    get_unique_input_parameter_combinations,
+    load_data_frame,
+    train_val_split,
+)
 from xyh_ml.data.reweighting import reweight_by_group
 from xyh_ml.data.torch import create_torch_dataset
 from xyh_ml.data.transformations import (
+    apply_transformations_to_unique_input_parameters,
     derive_transformations,
 )
 from xyh_ml.nn.losses import get_loss_fn
 from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
+from xyh_ml.nn.parameters import resample_input_parameters
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -46,187 +46,6 @@ def prepare_output_dir(
     if not output_dir.exists():
         output_dir.mkdir(parents=True)
         logger.debug(f"Created output directory {output_dir}")
-
-
-def get_unique_input_parameter_combinations(
-    df: DataFrame,
-    parameter_variables: list[Variable],
-) -> DataFrame:
-    """
-    Get unique combinations of input parameter values from the data frame.
-
-    Parameters
-    ----------
-
-    df : DataFrame
-        Data frame containing the input parameter values.
-
-    parameter_variables : list[Variable]
-        List of input parameter variables to get unique values for.
-
-    Returns
-    -------
-    DataFrame
-        Data frame containing unique combinations of input parameter values.
-    """
-
-    # Create list of parameter names
-    parameter_names = [p.name for p in parameter_variables]
-
-    logger.debug(
-        "Getting unique combinations of input parameter values for parameters "
-        + f"{parameter_names}"
-    )
-
-    # Get unique values of the parameters in the data frame
-    unique_parameters = df[parameter_names].drop_duplicates()
-
-    # Remove values uniquely composed of fallback values
-    mask = reduce(
-        or_,
-        [
-            unique_parameters.iloc[:, i] != p.fallback_value
-            for i, p in enumerate(parameter_variables)
-        ],
-    )
-    unique_parameters = unique_parameters.loc[mask].reset_index(drop=True)
-    logger.debug(
-        f"Found {len(unique_parameters)} unique combinations of input parameter values"
-    )
-
-    return unique_parameters
-
-
-def apply_transformations_to_unique_input_parameters(
-    unique_parameters: pd.DataFrame,
-    transformations: dict[str, dict[str, Any]],
-) -> DataFrame:
-    """
-    Apply transformations to the unique parameter combinations.
-
-    Parameters
-    ----------
-    unique_parameters : DataFrame
-        Data frame containing unique combinations of input parameter values.
-
-    transformations : dict
-        Dictionary containing the fitted transformation objects and the
-        corresponding variable names. For more information, see the
-        `derive_transformations` function.
-
-    Returns
-    -------
-    DataFrame
-        Transformed data frame with the same columns as the input data frame.
-    """
-
-    # Remember original sort order of parameters in data frame
-    parameter_names = unique_parameters.columns.tolist()
-
-    for transformation, transformation_dict in transformations.items():
-        # Get the transformation object and the variables to transform
-        t = transformation_dict["transformation"]
-        v = transformation_dict["variables"]
-
-        # Determine overlap between transformation's variable list and the
-        # columns of the unique_parameters data frame
-        v_overlap = list(set(v).intersection(set(unique_parameters.columns)))
-
-        # Continue if there is no overlap
-        if len(v_overlap) == 0:
-            continue
-
-        # TODO this is a hotfix, improve the implementation
-
-        # Create temporary transformation that only contains the overlapping
-        # variables
-        t_tmp = None
-        if transformation == "ordinal_encoding":
-            feature_names_in = t.get_feature_names_out().tolist()
-            categories = [
-                t.categories_[feature_names_in.index(vo)] for vo in v_overlap
-            ]
-            t_tmp = copy.deepcopy(t)
-            t_tmp.categories_ = categories
-            t_tmp.feature_names_in_ = np.array(v_overlap)
-            t_tmp.n_features_in_ = len(v_overlap)
-        else:
-            feature_names_out = t.get_feature_names_out().tolist()
-            mean = np.array(
-                [t.mean_[feature_names_out.index(vo)] for vo in v_overlap]
-            )
-            scale = np.array(
-                [t.scale_[feature_names_out.index(vo)] for vo in v_overlap]
-            )
-            t_tmp = StandardScaler()
-            t_tmp.mean_, t_tmp.scale_ = mean, scale
-
-        # Apply transform to the columns
-        unique_parameters[v_overlap] = t_tmp.transform(
-            unique_parameters[v_overlap]
-        )
-        logger.debug(
-            f"Applied transformation {transformation} for variables "
-            + f"{v_overlap}"
-        )
-
-    # Reorder the columns of the unique_parameters data frame to match the
-    # original order
-    unique_parameters = unique_parameters.loc[:, parameter_names]
-
-    return unique_parameters
-
-
-def resample_input_parameters(
-    parameters: Tensor,
-    resample_mask: Tensor,
-    unique_parameters: Tensor,
-    rng: torch.Generator | None = None,
-) -> Tensor:
-    """
-    Resample input parameter values for events that are marked for resampling
-    in the `resample_mask`.
-
-    Parameters
-    ----------
-    parameters : Tensor
-        Tensor containing the input parameter values for each event. Shape is
-        (num_events, num_parameters).
-
-    resample_mask : Tensor
-        Boolean tensor indicating which events should have their input parameter
-        values resampled. Shape is (num_events,).
-
-    unique_parameters : Tensor
-        Tensor containing unique combinations of input parameter values. Shape
-        is (num_unique_combinations, num_parameters).
-
-    rng : torch.Generator | None, optional
-        Random number generator to use for sampling. If `None`, the default
-        generator is used. Default is `None`.
-
-    Returns
-    -------
-    Tensor
-        Tensor containing the input parameter values for each event after
-        resampling. Shape is (num_events, num_parameters).
-    """
-
-    # Sample a random index in the unique_parameters list for each event that
-    # is marked for resampling
-    unique_parameters_index = torch.randint(
-        0,
-        unique_parameters.size(0),
-        size=(torch.sum(resample_mask),),
-        generator=rng,
-        device=parameters.device,
-    )
-
-    # Change values of parameters that have been declared for resampling
-    index = torch.where(resample_mask)[0]
-    parameters[index] = unique_parameters[unique_parameters_index]
-
-    return parameters
 
 
 def train_and_validate(
