@@ -366,7 +366,7 @@ def train_and_validate(
     )
 
     # Create the EarlyStopping callback
-    early_stopping_callback = lightning.callbacks.EarlyStopping(
+    early_stopping_callback = EarlyStopping(
         monitor="val_loss",
         mode="min",
         patience=training.early_stopping_patience,
@@ -375,13 +375,20 @@ def train_and_validate(
     )
 
     # Create a temporary directory for storing checkpoints during training
+    tmp_parent_dir = Path(os.getcwd(), "tmp")
+    if not tmp_parent_dir.exists():
+        tmp_parent_dir.mkdir(parents=True)
+        logger.debug(f"Created temporary directory {tmp_parent_dir}")
     with tempfile.TemporaryDirectory(
-        dir=Path(os.cwd(), "tmp"),
+        dir=tmp_parent_dir,
         delete=False,
     ) as tmp_results_dir:
+        logger.info(
+            f"Created temporary directory for training results: {tmp_results_dir}"
+        )
         # Create the checkpoint callback
-        checkpoint_callback = lightning.callbacks.ModelCheckpoint(
-            dirpath=tmp_results_dir / "checkpoints",
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=os.path.join(tmp_results_dir, "checkpoints"),
             filename="best-model_epoch{epoch}_step{step}",
             monitor="val_loss",
             mode="min",
@@ -390,25 +397,25 @@ def train_and_validate(
         )
 
         # Create the checkpoint callback
-        logging_callback = lightning.pytorch.loggers.CSVLogger(
-            tmp_results_dir / "logs",
-            filename="best-model_epoch{epoch}_step{step}",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=1,
-            verbose=False,
+        training_logger = lightning.pytorch.loggers.CSVLogger(
+            save_dir=os.path.join(tmp_results_dir, "logs"),
+            name=None,
         )
 
         # Create the PyTorch Lightning trainer and run the training
         trainer = lightning.Trainer(
             max_epochs=max_epochs,
+            callbacks=[
+                early_stopping_callback,
+                checkpoint_callback,
+            ],
+            logger=training_logger,
             accelerator=device,
         )
         trainer.fit(
             lightning_module,
             train_dataloaders=data_loader_train,
             val_dataloaders=data_loader_val,
-            callbacks=[early_stopping_callback, checkpoint_callback],
         )
 
         # Load the best model checkpoint after training
