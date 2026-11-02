@@ -332,7 +332,7 @@ def train_and_validate(
     # Get the loss function
     loss_fn = get_loss_fn(training.loss_fn, training.loss_fn_kwargs)
     logger.debug(
-        f"Using loss function {loss_fn} with kwargs {training.loss_fn_kwargs}"
+        f"Using loss function {training.loss_fn} with kwargs {training.loss_fn_kwargs}"
     )
 
     # Collect optimizer's kwargs
