@@ -109,9 +109,9 @@ def get_loss_fn(loss_fn: str, loss_kwargs: dict[str, Any]):
     callable
         The loss function.
     """
-    if loss_fn == "cross_entropy":
+    if loss_fn == "cross_entropy_loss":
         return cross_entropy_loss
-    elif loss_fn == "focal":
+    elif loss_fn == "focal_loss":
         required = {"gamma"}
         if set(loss_kwargs.keys()) != required:
             raise ValueError(
