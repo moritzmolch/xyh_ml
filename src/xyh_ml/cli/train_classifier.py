@@ -18,10 +18,8 @@ from torch.nn import Module
 from torch.utils.data import TensorDataset
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.cli.model import MultiLayerPerceptron
 from xyh_ml.config import (
     Config,
-    Network,
     Training,
     Variable,
 )
@@ -32,6 +30,7 @@ from xyh_ml.data.transformations import (
     derive_transformations,
 )
 from xyh_ml.nn.losses import get_loss_fn
+from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -47,46 +46,6 @@ def prepare_output_dir(
     if not output_dir.exists():
         output_dir.mkdir(parents=True)
         logger.debug(f"Created output directory {output_dir}")
-
-
-def create_multi_layer_perceptron_model(
-    input_size: int,
-    output_size: int,
-    network: Network,
-) -> MultiLayerPerceptron:
-    """
-    Create a simple multi-layer perceptron model.
-
-    Parameters
-    ----------
-    input_size : int
-        Number of input features.
-
-    output_size : int
-        Number of output classes.
-
-    network : Network
-        Network configuration containing hyperparameter settings of the network
-        architecture.
-
-    Returns
-    -------
-    MultiLayerPerceptron
-        Multi-layer perceptron model with the specified architecture and
-        hyperparameters.
-    """
-
-    # Create the model
-    model = MultiLayerPerceptron(
-        input_size,
-        output_size,
-        network.hidden_layers,
-        network.activation,
-        network.dropout_frac,
-        activation_kwargs=network.activation_kwargs,
-    )
-
-    return model
 
 
 def get_unique_input_parameter_combinations(
