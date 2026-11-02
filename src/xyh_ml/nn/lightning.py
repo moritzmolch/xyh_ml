@@ -445,7 +445,7 @@ def train_and_validate(
             lightning_module.load_from_checkpoint(best_model_path)
 
         # Load the logs after training
-        logs_path = logging_callback.log_dir / "metrics.csv"
+        logs_path = training_logger.log_dir / "metrics.csv"
         if logs_path.exists():
             logger.debug(f"Loading training logs from: {logs_path}")
             logs = pd.read_csv(logs_path)
