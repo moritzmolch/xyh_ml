@@ -83,8 +83,8 @@ def focal_loss(
         target,
         reduction="none",
     )
-    p_t = torch.exp(-ce_elements)
-    elements = torch.pow(1 - p_t, gamma) * ce_elements
+    one_minus_p_t = -torch.expm1(-ce_elements)
+    elements = torch.pow(one_minus_p_t, gamma) * ce_elements
 
     # Calculate weighted sum
     loss = torch.sum(weight * elements) / torch.sum(weight)
