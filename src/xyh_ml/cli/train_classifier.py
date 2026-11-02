@@ -2,7 +2,7 @@ import copy
 import json
 import logging
 import pickle
-from functools import reduce
+from functools import partial, reduce
 from operator import or_
 from pathlib import Path
 from time import time
@@ -1264,13 +1264,13 @@ def main(cfg: Config):
             train_weight,
         )
 
-    # Reweight events so that signal : background ratio is 1 : 1
-    for split in data_frames:
-        data_frames[split] = reweight_by_group(
-            data_frames[split],
-            "is_signal",
-            train_weight,
-        )
+        # # Reweight events so that signal : background ratio is 1 : 1
+        # for split in data_frames:
+        #     data_frames[split] = reweight_by_group(
+        #         data_frames[split],
+        #         "is_signal",
+        #         train_weight,
+        #     )
 
     # Fit transformations to preprocess input and output variables on the
     # training dataset
