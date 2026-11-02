@@ -1,8 +1,5 @@
-import json
 import logging
-import pickle
 from pathlib import Path
-from typing import Any
 
 import hydra
 import numpy as np
@@ -23,13 +20,17 @@ from xyh_ml.data.transformations import (
     apply_transformations_to_unique_input_parameters,
     derive_transformations,
 )
+from xyh_ml.io import (
+    dump_checkpoints,
+    dump_config,
+    dump_metrics,
+    dump_transformations,
+)
 from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 from xyh_ml.nn.training import train_and_validate
 
 # Set up logging
 logger = logging.getLogger(__name__)
-
-# Seeds
 
 
 def prepare_output_dir(
@@ -39,100 +40,6 @@ def prepare_output_dir(
     if not output_dir.exists():
         output_dir.mkdir(parents=True)
         logger.debug(f"Created output directory {output_dir}")
-
-
-def dump_config(
-    output_file: Path,
-    config: Config,
-):
-    """
-    Serialize training configuration to a JSON file.
-
-    Parameters
-    ----------
-    output_file : Path
-        Path to the output JSON file.
-
-    config : Config
-        Training configuration to serialize. Must be an instance of the
-        `Config` dataclass.
-    """
-
-    # Serialize training configuration in a JSON file
-    with output_file.open(mode="w") as f:
-        json.dump(config, f, default=str, indent=4)
-    logger.debug(f"Serialized configuration to {output_file} in JSON format")
-
-
-def dump_transformations(
-    output_file: Path,
-    transformations: dict[str, dict[str, Any]],
-):
-    """
-    Serialize fitted transformations to a pickle file.
-
-    Parameters
-    ----------
-    output_file : Path
-        Path to the output pickle file.
-
-    transformations : dict
-        Dictionary containing the fitted transformation objects and the
-        corresponding variable names. For more information, see the
-        `derive_transformations` function.
-    """
-
-    # Serialize transformation objects in a pickle file
-    with output_file.open(mode="wb") as f:
-        pickle.dump(transformations, f)
-    logger.debug(
-        f"Serialized transformations to {output_file} in pickle format"
-    )
-
-
-def dump_metrics(
-    output_file: Path,
-    metrics: list[dict[str, Any]],
-):
-    """
-    Serialize tracked metrics to a JSON file.
-
-    Parameters
-    ----------
-    output_file : Path
-        Path to the output JSON file.
-
-    metrics : dict
-        Dictionary containing the tracked metrics.
-    """
-
-    # Serialize tracked metrics in a JSON file
-    with output_file.open(mode="w") as f:
-        json.dump(metrics, f)
-    logger.debug(f"Serialized metrics to {output_file} in JSON format")
-
-
-def dump_checkpoints(
-    output_file: Path,
-    checkpoints: list[dict[str, Any]],
-):
-    """
-    Serialize tracked model checkpoints to a torch file.
-
-    Parameters
-    ----------
-    output_file : Path
-        Path to the output torch file.
-
-    checkpoints : list
-        List of model checkpoints after each epoch.
-    """
-
-    # Serialize tracked checkpoints with the torch.save function
-    torch.save(checkpoints, output_file)
-    logger.debug(
-        f"Serialized model checkpoints to {output_file} in torch format"
-    )
 
 
 @hydra.main(
