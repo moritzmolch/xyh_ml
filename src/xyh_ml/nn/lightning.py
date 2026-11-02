@@ -7,6 +7,7 @@ from typing import Any, Callable, Literal
 import lightning
 import pandas as pd
 import torch
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from torch import Generator, Tensor
 from torch.nn import Module
 from torch.optim import Adam
