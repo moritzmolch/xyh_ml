@@ -202,7 +202,7 @@ class PNNLightning(lightning.LightningModule):
         loss = eval_results["loss"]
 
         # Log metrics
-        self._log_step(eval_results, batch_idx, "train")
+        self._log_step(eval_results, batch_idx, "val")
 
         return loss
 
