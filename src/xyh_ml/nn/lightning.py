@@ -35,11 +35,14 @@ class PNNLightning(lightning.LightningModule):
         self.model = model
         self.loss_fn = loss_fn
         self.optimizer_kwargs = optimizer_kwargs
-        self.unique_parameters = unique_parameters
+        self.register_buffer(
+            "unique_parameters",
+            unique_parameters,
+            persistent=False,
+        )
 
         # Create the generator for parameter sampling
-        self.sampling_rng = Generator(device=self.device)
-        self.sampling_rng.manual_seed(PARAMETER_SAMPLING_SEED)
+        self.sampling_rng = None
 
         # Internal store to track individual losses during epoch for proper
         # averaging
@@ -49,6 +52,17 @@ class PNNLightning(lightning.LightningModule):
     def forward(self, x: Tensor) -> Tensor:
         # Forward input to model
         return self.model(x)
+
+    def _init_rng(self):
+        # Initialize the generator for parameter sampling before the training
+        self.sampling_rng = Generator(device=self.device)
+        self.sampling_rng.manual_seed(PARAMETER_SAMPLING_SEED)
+
+    def on_fit_start(self):
+        self._init_rng()
+
+    def on_validation_start(self):
+        self._init_rng()
 
     def _eval_model_and_loss_step(
         self,
