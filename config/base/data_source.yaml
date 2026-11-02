@@ -1,5 +1,9 @@
 base_dir: /ceph/mmolch/xyh-bbtautau-crown/bbtautau-kit/data/output/${tags.snapshot_tag}/snapshots/{campaign}/{channel}__{channel}_base
 campaigns:
+- 2022_pre_ee_nano_v12
+- 2022_post_ee_nano_v12
+- 2023_pre_bpix_nano_v12
+- 2023_post_bpix_nano_v12
 - 2024_nano_v15
 - 2025_nano_v15
 channels:
