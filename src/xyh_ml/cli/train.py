@@ -42,7 +42,7 @@ def prepare_output_dir(
 
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
-    config_name="train_classifier",
+    config_name="train",
     version_base="1.3",
 )
 def main(cfg: Config):

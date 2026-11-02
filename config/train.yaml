@@ -24,4 +24,4 @@ hydra:
     dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
   job:
     chdir: false
-  verbose: true
+  verbose: INFO
