@@ -58,6 +58,7 @@ python = "3.13.*"
 ipython = ">=9.17.1,<10"
 uproot = ">=5.7.7,<6"
 jupyterlab = ">=4.6.4,<5"
+xrootd = ">=6.2.1,<7"
 
 [tool.pixi.pypi-dependencies]
 xyh_ml = { path = ".", editable = true }
