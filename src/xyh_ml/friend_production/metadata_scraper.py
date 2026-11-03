@@ -138,6 +138,15 @@ def scrape_metadata(
     for era, era_dir in get_era_dirs(
         xrd_fs, os.path.join(base_dir, ntuple_tag)
     ).items():
+        # If era is not in the campaigns list, raise an error
+        if era not in eras_lookup:
+            msg = (
+                f"Era '{era}' found in the directory structure but not in the "
+                + "list of campaigns."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
         # Get the campaign
         campaign = eras_lookup[era]
 
