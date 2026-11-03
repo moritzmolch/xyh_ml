@@ -6,10 +6,8 @@ import hydra
 from XRootD.client import FileSystem
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.config import (
-    Config,
-)
-from xyh_ml.friend_production.metadata_scraper import scrape_metadata
+from xyh_ml.config.dataclasses import Config, Friend
+from xyh_ml.friend_production.scraper import scrape_metadata
 from xyh_ml.io import dump_json
 
 # Set up logging
@@ -23,13 +21,14 @@ logger = logging.getLogger(__name__)
 )
 def main(cfg: Config):
     # Get ntuple store metadata
-    xrootd_server = cfg.ntuples.xrootd_server
-    base_dir = cfg.ntuples.base_dir
-    ntuple_tag = cfg.ntuples.tag
-    friends = cfg.ntuples.friends
+    xrootd_server = cfg.ntuple.xrootd_server
+    base_dir = cfg.ntuple.base_dir
+    ntuple_tag = cfg.ntuple.tag
+    friends = [Friend(**f) for f in cfg.ntuple.friends]
+    samples = cfg.ntuple.samples
 
     # Get information about what to process
-    campaigns = cfg.ntuples.campaigns
+    campaigns = cfg.campaigns
 
     # Create the XRootD file system
     xrd_fs = FileSystem(xrootd_server)
@@ -41,13 +40,13 @@ def main(cfg: Config):
         ntuple_tag=ntuple_tag,
         friends=friends,
         campaigns=campaigns,
-        samples=cfg.ntuples.samples,
+        samples=samples,
     )
 
     # Dump the sample metadata to a JSON file
     output_file = Path(cfg.metadata_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    dump_json(asdict(samples), output_file)
+    dump_json(output_file, [asdict(s) for s in samples])
 
 
 if __name__ == "__main__":

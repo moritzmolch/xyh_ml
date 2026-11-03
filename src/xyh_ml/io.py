@@ -31,12 +31,16 @@ def dump_json(
         A JSON-serializable object.
     """
 
-    # Decide on the open function based on the file extension
-    open_fn = gzip.open if output_file.suffix == ".gz" else open
+    if output_file.name.endswith(".json.gz"):
+        # If the file ends with 'gz', open the file with gzip library
+        with gzip.open(output_file, "w") as f:
+            f.write(json.dumps(data).encode("utf-8"))
 
-    # Dump data into JSON file
-    with open_fn(output_file, mode="w") as f:
-        json.dump(data, f)
+    else:
+        # Use default json.dump behavior otherwise
+        with output_file.open("w") as f:
+            json.dump(data, f)
+
     logger.debug(f"Dumped JSON data to {output_file}")
 
 
@@ -61,13 +65,20 @@ def load_json(
         A JSON-deserialized object.
     """
 
-    # Decide on the open function based on the file extension
-    open_fn = gzip.open if input_file.suffix == ".gz" else open
+    # Initialize data object
+    data = None
 
-    # Dump data into JSON file
-    with open_fn(input_file, mode="w") as f:
-        data = json.load(f)
-    logger.debug(f"Loaded JSON data from {input_file}")
+    if input_file.name.endswith(".json.gz"):
+        # If the file ends with 'gz', open the file with gzip library
+        with gzip.open(input_file, "r") as f:
+            data = json.loads(f.read().decode("utf-8"))
+
+    else:
+        # Use default json.load behavior otherwise
+        with input_file.open("r") as f:
+            data = json.load(f)
+
+    logging.info(f"Loaded data from {input_file}")
 
     return data
 
