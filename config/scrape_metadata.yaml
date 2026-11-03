@@ -4,6 +4,7 @@
 
 defaults:
 - base/artifacts@artifacts
+- base/campaigns@campaigns
 - base/data_source@data_source
 - base/dataset@dataset
 - base/mode@mode
@@ -11,7 +12,7 @@ defaults:
 - base/outputs@outputs
 - base/tags@tags
 - base/training@training
-- base/_ntuple@ntuple
+- _ntuple@ntuple
 - inputs: y2b_h2tau
 - _self_
 
