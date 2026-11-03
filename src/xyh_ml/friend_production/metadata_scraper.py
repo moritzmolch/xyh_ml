@@ -86,7 +86,7 @@ def get_shifts(
             )
 
         # Check if the key matches the pattern for a shifted variable
-        m = re.match(r"(?P<variable>.+)__?(?P<shift>(.+)(Up|Down))$", key)
+        m = re.match(r"(?P<variable>.+?)(__(?P<shift>.+(Up|Down)))?$", key)
         if not m:
             msg = (
                 f"Column name '{key}' does not match the expected pattern for "
@@ -97,12 +97,12 @@ def get_shifts(
 
         # Extract the variable and shift from the match
         variable = m.group("variable")
-        shift = m.group("shift")
+        shift = m.group("shift") or "nominal"
 
         # Add the shift to the map for the corresponding variable
         shift_map.setdefault(shift, []).append(
             Variable(
-                variable=variable,
+                name=variable,
                 column=key,
             ),
         )
@@ -124,7 +124,7 @@ def scrape_metadata(
     base_dir: str,
     ntuple_tag: str,
     friends: list[Friend],
-    campaigns: list[Campaign] = None,
+    campaigns: list[Campaign],
     samples: list[str] = None,
 ):
     # Create a lookup for campaigns by era
