@@ -3,13 +3,13 @@ from dataclasses import dataclass
 
 @dataclass
 class Variable:
-    variable: str
+    name: str
     column: str
 
 
 @dataclass
 class Shift:
-    shift: str
+    name: str
     variables: list[Variable]
 
 
