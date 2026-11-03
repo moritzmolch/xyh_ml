@@ -136,7 +136,7 @@ class Friend:
 
 @dataclass
 class NTupleSource:
-    ntuple_tag: str
+    tag: str
     xrootd_server: str
     base_dir: str
     friends: list[Friend]

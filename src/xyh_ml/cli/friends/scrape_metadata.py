@@ -25,6 +25,7 @@ def main(cfg: Config):
     # Get ntuple store metadata
     xrootd_server = cfg.ntuples.xrootd_server
     base_dir = cfg.ntuples.base_dir
+    ntuple_tag = cfg.ntuples.tag
     friends = cfg.ntuples.friends
 
     # Get information about what to process
@@ -37,6 +38,7 @@ def main(cfg: Config):
     samples = scrape_metadata(
         xrd_fs=xrd_fs,
         base_dir=base_dir,
+        ntuple_tag=ntuple_tag,
         friends=friends,
         campaigns=campaigns,
         samples=cfg.ntuples.samples,

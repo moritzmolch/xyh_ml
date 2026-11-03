@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 
 import uproot
@@ -121,6 +122,7 @@ def get_shifts(
 def scrape_metadata(
     xrd_fs: FileSystem,
     base_dir: str,
+    ntuple_tag: str,
     friends: list[Friend],
     campaigns: list[Campaign] = None,
     samples: list[str] = None,
@@ -133,7 +135,9 @@ def scrape_metadata(
 
     # Iterate through the eras, samples, and channels to collect sample
     # metadata
-    for era, era_dir in get_era_dirs(xrd_fs, base_dir):
+    for era, era_dir in get_era_dirs(
+        xrd_fs, os.path.join(base_dir, ntuple_tag)
+    ):
         # Get the campaign
         campaign = eras_lookup[era]
 
