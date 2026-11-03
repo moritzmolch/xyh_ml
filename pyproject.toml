@@ -100,8 +100,12 @@ deepthought = { features = ["cuda120"], platforms = ["linux-64-cuda"] }
 # deepthought2: CUDA 12.9 / pytorch 2.14.1 -- for machines whose driver supports
 # CUDA >= 12.9 (e.g. kek, ms): pixi shell / pixi run
 deepthought2 = { features = ["cuda129"], platforms = ["linux-64-cuda129"] }
-# cpu: CPU-only pytorch (no CUDA support at all) -- for machines without an
-# NVIDIA GPU / CUDA driver: pixi shell -e cpu / pixi run -e cpu
-cpu = { features = ["cpu"], platforms = ["linux-64"] }
+
+[tool.pixi.environments.cpu]
+features = ["cpu"]
+platforms = ["linux-64"]
+
+[tool.pixi.environments.cpu.dependencies]
+pytest = ">=9.2.0,<10"
 
 [tool.pixi.tasks]
