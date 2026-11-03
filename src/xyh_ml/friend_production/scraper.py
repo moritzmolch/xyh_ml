@@ -25,7 +25,6 @@ def get_shifts(
 ) -> list[Shift]:
     ntuple_keys = []
     for i, main_file in enumerate(main_files):
-        print(main_file)
         with uproot.open(main_file) as f:
             # Check if the ntuple tree exists and if it has entries
             if "ntuple" not in f:
@@ -44,7 +43,7 @@ def get_shifts(
             ntuple_keys = f["ntuple"].keys()
 
         # Get the corresponding friends and extract their keys as well
-        for friend_name, friend_file_list in friend_files.items():
+        for friend_file_list in friend_files.values():
             friend_file = friend_file_list[i]
             print(friend_file)
             with uproot.open(friend_file) as f:
@@ -75,7 +74,7 @@ def get_shifts(
             # Add the friend keys to the ntuple keys
             ntuple_keys.extend(friend_keys)
 
-        # Break the loop after the first successfully opened files
+        # Break the loop after the first successfully opened file + friends
         break
 
     shift_map = {}
