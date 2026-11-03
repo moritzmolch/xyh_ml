@@ -64,7 +64,7 @@ def _plot_efficiencies(
         df_part_x = df_part.loc[df_part["class"] == output_classes[0].name]
         x = np.arange(len(df_part_x)) + 0.5
         x_labels = [
-            f"{df_part_x.iloc[i]['m_y']}" for i in range(len(df_part_x))
+            f"{int(df_part_x.iloc[i]['m_y'])}" for i in range(len(df_part_x))
         ]
 
         # Define the y axis positions for the different output classes list of
@@ -96,7 +96,7 @@ def _plot_efficiencies(
         )
         for i, ei in enumerate(edge_index[:-1]):
             ax[j].axvline(ei, color="black", linestyle="dashed", linewidth=1)
-            m_x = int(df_part_x.iloc[i]["m_x"])
+            m_x = int(df_part_x.iloc[ei]["m_x"])
             ax[j].text(
                 (ei + edge_index[i + 1]) / 2,
                 0.2,
@@ -143,7 +143,7 @@ def _plot_efficiencies(
     # Add title with information about decay mode, campaign, channel, and
     # held-out fold
     fig.suptitle(
-        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(Held-out fold {fold} of {n_folds})"
+        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(held-out fold {fold} of {n_folds})"
     )
 
     return fig, ax
@@ -151,7 +151,7 @@ def _plot_efficiencies(
 
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
-    config_name="evaluate_categorization",
+    config_name="plot_efficiencies",
     version_base="1.3",
 )
 def main(cfg: Config):
@@ -192,7 +192,6 @@ def main(cfg: Config):
             df_class = df[df["true_class_index"] == i]
             correct = df_class["predicted_class_index"] == i
             efficiency = correct.sum() / df_class.shape[0]
-            print(output_class.name, df_class.shape[0])
             efficiencies.append(
                 {
                     "campaign": campaign,
