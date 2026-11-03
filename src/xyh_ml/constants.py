@@ -5,3 +5,5 @@ ROOT_DIR = Path(__file__).parent.parent.parent
 
 # Default seed value
 DEFAULT_SEED = 4712
+TRAIN_TEST_SPLIT_SEED = 4712
+PARAMETER_SAMPLING_SEED = 583

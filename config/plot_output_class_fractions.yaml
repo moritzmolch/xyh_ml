@@ -1,17 +1,17 @@
 # -----------------------------------------------------------------------------
-# Default configuration for the classifier training
+# Default configuration for plotting the output class fractions
 # -----------------------------------------------------------------------------
 
 defaults:
-- base/mode@mode
-- base/tags@tags
 - base/artifacts@artifacts
-- inputs: y2b_h2tau
-- base/outputs@outputs
 - base/data_source@data_source
 - base/dataset@dataset
+- base/mode@mode
 - base/network@network
+- base/outputs@outputs
+- base/tags@tags
 - base/training@training
+- inputs: y2b_h2tau
 - _self_
 
 
@@ -24,4 +24,4 @@ hydra:
     dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
   job:
     chdir: false
-  verbose: true
+  verbose: INFO

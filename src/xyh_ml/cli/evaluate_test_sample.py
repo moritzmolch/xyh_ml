@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from time import time
 
 import hydra
 import numpy as np
@@ -9,30 +10,84 @@ from pandas import DataFrame
 from torch.nn import Module
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.cli.evaluate_classifier import (
-    load_best_checkpoint,
-    load_checkpoints,
-    load_metrics,
-    load_transformations,
-    predict,
-)
-from xyh_ml.cli.train_classifier import (
-    create_multi_layer_perceptron_model,
-    create_torch_dataset,
-    get_unique_input_parameter_combinations,
-    load_data_frame,
-)
 from xyh_ml.config import (
     Config,
     Variable,
 )
+from xyh_ml.constants import PARAMETER_SAMPLING_SEED
+from xyh_ml.data.data_frame import (
+    get_unique_input_parameter_combinations,
+    load_data_frame,
+)
+from xyh_ml.data.torch import create_torch_dataset
+from xyh_ml.io import load_transformations
+from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Seeds
-TRAIN_TEST_SPLIT_SEED = 4712
-PARAMETER_SAMPLING_SEED = 583
+
+def predict(
+    model: torch.nn.Module,
+    dataset: torch.utils.data.TensorDataset,
+    device: str,
+    data_loader_num_workers: int = 1,
+    data_loader_pin_memory: bool = False,
+    batch_size: int = 65536,
+):
+    # Create the data loader for predictions
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=data_loader_num_workers,
+        pin_memory=data_loader_pin_memory,
+    )
+
+    # Move the model to the training device and turn on evaluation mode
+    model = model.eval().to(device)
+
+    # Start time tracking
+    start = time()
+
+    pred = []
+    targets = []
+    weights = []
+    for x, p, y, w, _ in data_loader:
+        # Move tensors to training device
+        x = x.to(device)
+        p = p.to(device)
+
+        # Get the network prediction and append it to the list of prediction
+        # tensors. Directly calculate normalized softmax scores
+        with torch.no_grad():
+            pred.append(
+                torch.nn.functional.softmax(
+                    model(torch.cat((x, p), dim=-1)),
+                    dim=-1,
+                )
+            )
+
+        # Collect output targets and event weights
+        targets.append(y)
+        weights.append(w)
+
+    # Concatenate predictions, targets, and weights and convert to numpy arrays
+    pred = torch.cat(pred, dim=0).cpu().numpy()
+    targets = torch.cat(targets, dim=0).cpu().numpy()
+    weights = torch.cat(weights, dim=0).cpu().numpy()
+
+    # Stop time tracking
+    stop = time()
+
+    # Log number of events and time spent for evaluation
+    n_events = len(pred)
+    delta = round(stop - start, 2)
+    logger.debug(
+        f"Evaluated model predictions for {n_events} events in {delta} s"
+    )
+
+    return pred, targets, weights
 
 
 def filter_and_set_evaluation_parameters(
@@ -45,7 +100,10 @@ def filter_and_set_evaluation_parameters(
     # the original cross section. Without sampling, the reduction rate is
     # 1 / n_folds because only the held-out fold is evaluated.
     reduction_rates = {
-        category: 1 / n_folds for category in data_frame["class"].unique()
+        (output_class, m_x, m_y): 1 / n_folds
+        for output_class, m_x, m_y in data_frame[["class", "m_x", "m_y"]]
+        .drop_duplicates()
+        .values
     }
 
     # Sample a few events from all categories to reduce evaluation time if
@@ -59,18 +117,30 @@ def filter_and_set_evaluation_parameters(
         # Create the sample index for each category, select all events if less
         # than n_samples_per_category have been found
         sample_index = []
-        for category in data_frame["class"].unique():
+
+        for (output_class, m_x, m_y), df in data_frame.groupby(
+            ["class", "m_x", "m_y"]
+        ):
+            assert (
+                output_class != "xyh" and m_x == -10 and m_y == -10
+            ) or output_class == "xyh", (
+                f"Found unexpected parameter values for class {output_class}: "
+                f"m_x={m_x}, m_y={m_y}"
+            )
+
             # Get sampled index or all events if less than
             # n_samples_per_category have been found
-            index = data_frame.loc[data_frame["class"] == category].index
+            index = df.index
             if len(index) <= n_samples_per_category:
                 sample_index.append(index)
             else:
                 i = rng.choice(len(index), size=(n_samples_per_category,))
                 sample_index.append(index[i])
 
-            # Calculate reduction rate of this sample due to sampling
-            reduction_rates[category] *= len(sample_index[-1]) / len(index)
+            # Calculate the reduction rate
+            reduction_rates[(output_class, m_x, m_y)] *= len(
+                sample_index[-1]
+            ) / len(index)
 
         # Concatenate sample index and select events from the data frame
         sample_index = np.concatenate(sample_index, axis=0)
@@ -81,7 +151,9 @@ def filter_and_set_evaluation_parameters(
 
     # Add reduction rate to events
     logger.debug(f"Reduction rates: {reduction_rates}")
-    data_frame["reduction_rate"] = data_frame["class"].map(reduction_rates)
+    data_frame["reduction_rate"] = data_frame[["class", "m_x", "m_y"]].apply(
+        lambda x: reduction_rates[(x["class"], x["m_x"], x["m_y"])], axis=1
+    )
 
     # Split into signal and background events as they require different
     # treatment for filling the parameter values.
@@ -129,6 +201,7 @@ def predict_for_parameters(
     transformations: dict,
     unique_parameter_values: DataFrame,
     n_folds: int,
+    batch_size=65536,
     n_samples_per_category: int | None = None,
 ):
     # Filter signal events for values that the network is going to be evaluated
@@ -156,6 +229,7 @@ def predict_for_parameters(
         model,
         dataset,
         "cuda" if torch.cuda.is_available() else "cpu",
+        batch_size=batch_size,
     )
 
     return data_frame, predictions, targets, weights
@@ -163,7 +237,7 @@ def predict_for_parameters(
 
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
-    config_name="evaluate_categorization",
+    config_name="evaluate_test_sample",
     version_base="1.3",
 )
 def main(cfg: Config):
@@ -178,13 +252,27 @@ def main(cfg: Config):
         Path(cfg.artifacts.training_dir) / "transformations.pkl"
     )
 
-    # Load metrics from the training artifacts
-    metrics = load_metrics(Path(cfg.artifacts.training_dir) / "metrics.json")
+    # Create the neural network model
+    model = create_multi_layer_perceptron_model(
+        len(cfg.inputs.variables) + len(cfg.inputs.parameters),
+        len(cfg.outputs.classes),
+        cfg.network,
+    )
 
     # Load checkpoints from the training artifacts
-    checkpoints = load_checkpoints(
-        Path(cfg.artifacts.training_dir) / "checkpoints.pt"
-    )
+    best_model_ckpt_file = Path(cfg.artifacts.training_dir) / "best_model.ckpt"
+    best_model_state_dict = torch.load(
+        best_model_ckpt_file, map_location="cpu", weights_only=True
+    )["state_dict"]
+
+    # Rename keys in the state dict to match the bare model's keys if they are
+    # prefixed with "model."
+    for key in list(best_model_state_dict.keys()):
+        new_key = key
+        if key.startswith("model."):
+            new_key = key.replace("model.", "", 1)
+        best_model_state_dict[new_key] = best_model_state_dict.pop(key)
+    model.load_state_dict(best_model_state_dict)
 
     # Load the input files into a data frame from the fold that the network has
     # not been trained on
@@ -198,22 +286,14 @@ def main(cfg: Config):
         cfg.mode.channel,
     )
 
-    # Use the physics weight as evaluation weight
-    eval_weight = "__total_weight"
-
     # Get unique parameter combinations
     unique_parameters = get_unique_input_parameter_combinations(
         data_frame,
         cfg.inputs.parameters,
     )
 
-    # Create the neural network model
-    model = create_multi_layer_perceptron_model(
-        len(cfg.inputs.variables) + len(cfg.inputs.parameters),
-        len(cfg.outputs.classes),
-        cfg.network,
-    )
-    model = load_best_checkpoint(model, checkpoints, metrics)
+    # Use the physics weight as evaluation weight
+    eval_weight = "__total_weight"
 
     # Retrieve predictions for each unique parameter combination
     data_frame, predictions, targets, _ = predict_for_parameters(
@@ -226,6 +306,7 @@ def main(cfg: Config):
         transformations,
         unique_parameters,
         cfg.mode.n_folds,
+        batch_size=cfg.training.batch_size,
         n_samples_per_category=10_000,
     )
 

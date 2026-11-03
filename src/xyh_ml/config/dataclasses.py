@@ -76,6 +76,18 @@ class Network:
 
 
 @dataclass
+class Optimizer:
+    name: str
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Loss:
+    name: str
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class Training:
     max_epochs: int
     batch_size: int
@@ -83,6 +95,8 @@ class Training:
     optimizer_weight_decay: float
     data_loader_num_workers: int
     data_loader_pin_memory: bool
+    loss_fn: str
+    loss_fn_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -46,6 +46,7 @@ def _plot_efficiencies(
     campaign: str,
     channel: str,
     output_classes: list[OutputClass],
+    predicted_class: OutputClass,
 ):
     # Split data frames for upper and lower plot panels
     eff_upper, eff_lower = (
@@ -61,17 +62,19 @@ def _plot_efficiencies(
 
     for j, df_part in enumerate([eff_upper, eff_lower]):
         # Define the x axis positions and set x axis labels to m_y masses
-        df_part_x = df_part.loc[df_part["class"] == output_classes[0].name]
+        df_part_x = df_part.loc[
+            df_part["true_class"] == output_classes[0].name
+        ]
         x = np.arange(len(df_part_x)) + 0.5
         x_labels = [
-            f"{df_part_x.iloc[i]['m_y']}" for i in range(len(df_part_x))
+            f"{int(df_part_x.iloc[i]['m_y'])}" for i in range(len(df_part_x))
         ]
 
         # Define the y axis positions for the different output classes list of
         # efficiencies for each output class
         y = [
-            df_part.loc[df_part["class"] == output_class.name][
-                "efficiency"
+            df_part.loc[df_part["true_class"] == output_class.name][
+                "fraction"
             ].to_numpy()
             for output_class in output_classes
         ]
@@ -96,7 +99,7 @@ def _plot_efficiencies(
         )
         for i, ei in enumerate(edge_index[:-1]):
             ax[j].axvline(ei, color="black", linestyle="dashed", linewidth=1)
-            m_x = int(df_part_x.iloc[i]["m_x"])
+            m_x = int(df_part_x.iloc[ei]["m_x"])
             ax[j].text(
                 (ei + edge_index[i + 1]) / 2,
                 0.2,
@@ -110,7 +113,7 @@ def _plot_efficiencies(
         # Add m_x label on the right-hand side of the plot
         ax[j].text(
             edge_index[-1] + 4,
-            0.2,
+            0.9,
             r"$m_{\text{X}}$ (GeV)",
             va="bottom",
             ha="left",
@@ -125,7 +128,7 @@ def _plot_efficiencies(
         ax[j].set_xlim(np.min(x) - 0.5, np.max(x) + 0.5)
         ax[j].set_ylim(0.0, 1.05)
         ax[j].set_xlabel(r"$m_{\text{Y}}$ (GeV)")
-        ax[j].set_ylabel(r"$\epsilon$(correct class)")
+        ax[j].set_ylabel(r"Fraction of events in predicted class")
 
         # Add legend to the upper plot only
         if j == 0:
@@ -143,7 +146,15 @@ def _plot_efficiencies(
     # Add title with information about decay mode, campaign, channel, and
     # held-out fold
     fig.suptitle(
-        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(Held-out fold {fold} of {n_folds})"
+        "\t".join(
+            [
+                DECAY_MODE_LABELS[decay_mode],
+                CAMPAIGN_LABELS[campaign],
+                CHANNEL_LABELS[channel],
+                f"pred. {predicted_class.label} class",
+                f"(held-out fold {fold} of {n_folds})",
+            ]
+        ),
     )
 
     return fig, ax
@@ -151,7 +162,7 @@ def _plot_efficiencies(
 
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
-    config_name="evaluate_categorization",
+    config_name="plot_output_class_fractions",
     version_base="1.3",
 )
 def main(cfg: Config):
@@ -182,39 +193,52 @@ def main(cfg: Config):
 
     # Store efficiency of categorizing events into the correct class for each
     # unique parameter combination
-    efficiencies = []
+    fractions = []
     for (campaign, channel, m_x, m_y), df in data_frame.groupby(
         ["campaign", "channel", "m_x", "m_y"]
     ):
         # Get efficiency of categorizing events into the correct class for each
         # truth class
-        for i, output_class in enumerate(cfg.outputs.classes):
-            df_class = df[df["true_class_index"] == i]
-            correct = df_class["predicted_class_index"] == i
-            efficiency = correct.sum() / df_class.shape[0]
-            print(output_class.name, df_class.shape[0])
-            efficiencies.append(
-                {
-                    "campaign": campaign,
-                    "channel": channel,
-                    "m_x": m_x,
-                    "m_y": m_y,
-                    "class": output_class.name,
-                    "efficiency": efficiency,
-                }
-            )
+        for i, predicted_output_class in enumerate(cfg.outputs.classes):
+            df_class = df[df["predicted_class_index"] == i]
+            n_total = (
+                df_class["__total_weight"] * 1 / df_class["reduction_rate"]
+            ).sum()
+            for j, true_output_class in enumerate(cfg.outputs.classes):
+                df_class_process = df_class[df_class["true_class_index"] == j]
+                n_process = (
+                    df_class_process["__total_weight"]
+                    * 1
+                    / df_class_process["reduction_rate"]
+                ).sum()
+                fraction = n_process / n_total if n_total > 0 else 0.0
+                fractions.append(
+                    {
+                        "campaign": campaign,
+                        "channel": channel,
+                        "m_x": m_x,
+                        "m_y": m_y,
+                        "predicted_class": predicted_output_class.name,
+                        "true_class": true_output_class.name,
+                        "fraction": fraction,
+                    }
+                )
 
     # Convert records into a proper DataFrame for easier analysis and plotting
-    efficiencies = pd.DataFrame.from_records(efficiencies)
-    efficiencies = efficiencies.set_index(
+    fractions = pd.DataFrame.from_records(fractions)
+    efficiencies = fractions.set_index(
         ["m_x", "m_y"],
         drop=False,
     ).sort_index()
 
     # Plot the efficiencies for each channel and campaign
-    for (campaign, channel), df in efficiencies.groupby(
-        ["campaign", "channel"]
+    for (campaign, channel, predicted_class), df in efficiencies.groupby(
+        ["campaign", "channel", "predicted_class"]
     ):
+        predicted_class_obj = next(
+            (oc for oc in cfg.outputs.classes if oc.name == predicted_class),
+            None,
+        )
         fig, ax = _plot_efficiencies(
             df,
             cfg.mode.fold,
@@ -223,6 +247,7 @@ def main(cfg: Config):
             campaign,
             channel,
             cfg.outputs.classes,
+            predicted_class_obj,
         )
         for ext in ["pdf", "png"]:
             output_file = (
@@ -231,12 +256,12 @@ def main(cfg: Config):
                 / "output"
                 / cfg.tags.training_tag
                 / "plots"
-                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__fold{cfg.mode.fold}of{cfg.mode.n_folds}.{ext}"
+                / f"fractions_{predicted_class}__{cfg.mode.decay_mode}__{campaign}__{channel}__fold{cfg.mode.fold}of{cfg.mode.n_folds}.{ext}"
             )
             if not output_file.parent.exists():
                 output_file.parent.mkdir(parents=True)
             fig.savefig(output_file)
-            logger.info(f"Saved efficiency plot to {output_file}")
+            logger.info(f"Saved fraction plot to {output_file}")
 
 
 if __name__ == "__main__":

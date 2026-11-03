@@ -225,6 +225,9 @@ __marimo__/
 # Output directory
 output/
 
+# Ignore temporary files
+tmp/
+
 # Development notebooks
 notebooks_dev/
 

@@ -1,214 +1,85 @@
-import pandas as pd
+import logging
 
-# -----------------------------------------------------------------------------
-# Dataset reweighting
-# -----------------------------------------------------------------------------
+import numpy as np
+from pandas import DataFrame
 
-
-def reweight_sample_with_negative_weights(
-    df: pd.DataFrame,
-    process: str,
-    training_weight_name: str,
-):
-    """
-    Reweight a sample with negative weights to positive weights while
-    preserving the normalization of the sample.
-
-    Parameters
-    ----------
-
-    df : pd.DataFrame
-        The input data frame containing the events to be reweighted.
-
-    process : str
-        The name of the process class for which the reweighting should be
-        applied.
-
-    Returns
-    -------
-    pd.DataFrame
-        The data frame with the reweighted `weight` column.
-    """
-
-    # Mask for process class that the reweighting should be applied to
-    mask = df["class"] == process
-
-    # Calculate the sum of weights before reweighting for each class
-    sum_of_weights_before = df.loc[mask, training_weight_name].sum()
-
-    # Calculate the sum of weights after reweighting for each class
-    sum_of_weights_after = df.loc[mask, training_weight_name].abs().sum()
-
-    # Rescale the weights so that sum of weights is preserved after reweighting
-    scale_factor = (
-        sum_of_weights_before / sum_of_weights_after
-        if sum_of_weights_after > 0
-        else 1.0
-    )
-
-    # Apply the weights to the events of the considered class
-    df.loc[mask, training_weight_name] = (
-        scale_factor * df.loc[mask, training_weight_name].abs()
-    )
-
-    return df
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
-def reweight_signal_hypotheses(
-    df: pd.DataFrame,
-    process: str,
-    training_weight_name: str,
-):
-    """
-    Reweight mass hypotheses of a given signal process to have the same sum of
-    weights.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The input data frame containing the events to be reweighted.
-
-    process : str
-        The name of the process class for which the reweighting should be
-        applied.
-
-    Returns
-    -------
-    pd.DataFrame
-        The data frame with the reweighted `weight` column.
-    """
-
-    # Mask for process class that the reweighting should be applied to
-    mask = df["class"] == process
-
-    # Calculate sum of weights for each signal mass hypothesis
-    masses = df.loc[mask, ["m_x", "m_y"]].apply(tuple, axis=1).unique()
-    weights_before = {}
-    for m_x, m_y in masses:
-        weights_before[(m_x, m_y)] = df.loc[
-            mask & (df["m_x"] == m_x) & (df["m_y"] == m_y),
-            training_weight_name,
-        ].sum()
-
-    # Calculate average sum of weights across all mass hypotheses
-    average_weight = sum(weights_before.values()) / len(weights_before)
-
-    # Rescale the weights so that all mass hypotheses are balanced equally
-    for m_x, m_y in masses:
-        scale_factor = (
-            average_weight / weights_before[(m_x, m_y)]
-            if weights_before[(m_x, m_y)] > 0
-            else 1.0
-        )
-        df.loc[
-            mask & (df["m_x"] == m_x) & (df["m_y"] == m_y),
-            training_weight_name,
-        ] *= scale_factor
-
-    return df
-
-
-def reweight_processes(
-    df: pd.DataFrame,
-    training_weight_name: str,
-):
-    """
-    Reweight the process classes to have the same sum of weights.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The input data frame containing the events to be reweighted.
-
-    Returns
-    -------
-    pd.DataFrame
-        The data frame with the reweighted `weight` column.
-    """
-
-    # Calculate sum of weights for each process class
-    processes = df["class"].unique()
-    weights_before = {}
-    for process in processes:
-        weights_before[process] = df.loc[
-            df["class"] == process, training_weight_name
-        ].sum()
-
-    # Calculate average sum of weights across all process classes
-    average_weight = sum(weights_before.values()) / len(weights_before)
-
-    # Rescale the weights so that all process classes are balanced equally
-    for process in processes:
-        scale_factor = (
-            average_weight / weights_before[process]
-            if weights_before[process] > 0
-            else 1.0
-        )
-        df.loc[df["class"] == process, training_weight_name] *= scale_factor
-
-    return df
-
-
-def reweight(
-    dfs: dict[tuple[str, str], pd.DataFrame],
+def reweight_by_group(
+    df: DataFrame,
+    group: str | list[str],
     weight_name: str,
-    training_weight_name: str,
-    signal_processes: list[str],
-):
+    mask: np.ndarray | None = None,
+) -> DataFrame:
     """
-    Calculate event weights for the training for different purposes.
+    Reweight events in the data frame such that the sum of weights for each
+    group is equal to the mean sum of weights over all groups.
 
-    - The first step consists in reweighting single mass hypotheses of the
-      signal processes to have the same sum of weights.
-    - In the second step, the two inclusive signal classes, as well as events
-      from the single background classes are reweighted to have the same sum of
-      weights across all classes.
+    The groups are defined by the `group` parameter, which is a column or a
+    list of columns. The data frame is then split into groups based on the
+    unique values of the `group` columns.
+
+    The `weight_name` parameter specifies the weight column that is going to be
+    altered. It must already be present in the data frame.
+
+    The `mask` parameter can be used to select a subset of events to reweight.
+    If `mask` is `None`, all events are used.
 
     Parameters
     ----------
-    dfs : dict[tuple[str, str], pd.DataFrame]
-        A dictionary mapping split keys to data frames.
+    df : DataFrame
+        Data frame containing the events to reweight.
+
+    group : str | list[str]
+        Column or list of columns to group the events by.
 
     weight_name : str
-        The name of the column containing the original event weights.
+        Name of the weight column to reweight.
 
-    training_weight_name : str
-        The name of the new column with the training weight.
-
-    signal_processes : list[str]
-        The list of signal process classes for which the first step of the
-        reweighting should be applied.
+    mask : np.ndarray | None, optional
+        Boolean mask to select a subset of events to reweight. If `None`, all
+        events are used. Default is `None`.
 
     Returns
     -------
-    dict[tuple[str, str], pd.DataFrame]
-        The dictionary with the reweighted data frames.
+    DataFrame
+        Data frame with the modified `weight_name` column.
     """
-    for key in dfs:
-        # Get the data frame for the current split
-        df = dfs[key]
 
-        # Create the training weight, start with the "physics weight" of the
-        # event
-        df[training_weight_name] = df[weight_name]
+    # Create dummy mask that accepts all events if the mask has not been set
+    # in the function call
+    mask = mask if mask is not None else np.ones(df.shape[0], dtype=bool)
 
-        # Reweight all output classes with negative weights to positive weights
-        # while preserving the normalization of the sample
-        for process in df["class"].unique():
-            df = reweight_sample_with_negative_weights(
-                df, process, training_weight_name
-            )
+    # Create the grouper
+    df_groups = df.loc[mask].groupby(by=group)
 
-        # Reweight all mass hypotheses within a signal process to have the same
-        # sum of weights
-        for process in signal_processes:
-            df = reweight_signal_hypotheses(df, process, training_weight_name)
+    # Calculate sum of weights for each group and get the average value over
+    # all individual group values
+    sum_of_weights = df_groups.agg({weight_name: "sum"})
+    mean_sum_of_weights = sum_of_weights.mean().to_numpy()[0]
+    logger.debug(
+        f"Sum of weights per group before reweighting:\n{sum_of_weights.to_string()}"
+    )
+    logger.debug(f"Average sum of weights:\n{mean_sum_of_weights}")
 
-        # Reweight processes so that the sum of weights is the same for all
-        # processes is equal
-        df = reweight_processes(df, training_weight_name)
+    # Calculate the scale factor for each group, which scales the sum of weights
+    # of all groups to the mean sum of weights
+    scale_factor = mean_sum_of_weights / sum_of_weights
+    logger.debug(f"Scale factors for reweighting:\n{scale_factor.to_string()}")
 
-        # Put the reweighted data frame back into the dictionary
-        dfs[key] = df
+    # Apply the scale factor
+    for group_values, df_group in df_groups:
+        df.loc[df_group.index, weight_name] = (
+            scale_factor.loc[group_values].iloc[0]
+            * df.loc[df_group.index, weight_name]
+        )
 
-    return dfs
+    # Calculate sum of weights after reweighting (for logging purposes)
+    sum_of_weights = df.loc[mask].groupby(by=group).agg({weight_name: "sum"})
+    logger.debug(
+        f"Sum of weights per group after reweighting:\n{sum_of_weights.to_string()}"
+    )
+
+    return df
