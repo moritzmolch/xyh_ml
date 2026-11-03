@@ -131,13 +131,13 @@ def scrape_metadata(
     eras_lookup = {campaign.era: campaign for campaign in campaigns}
 
     # Container for sample specs
-    samples = []
+    sample_metadata = []
 
     # Iterate through the eras, samples, and channels to collect sample
     # metadata
     for era, era_dir in get_era_dirs(
         xrd_fs, os.path.join(base_dir, ntuple_tag)
-    ):
+    ).items():
         # Get the campaign
         campaign = eras_lookup[era]
 
@@ -149,7 +149,7 @@ def scrape_metadata(
             )
             continue
 
-        for sample, sample_dir in get_sample_dirs(xrd_fs, era_dir):
+        for sample, sample_dir in get_sample_dirs(xrd_fs, era_dir).items():
             # Skip sample if not in the list of samples
             if samples and sample not in samples:
                 logger.info(
@@ -157,7 +157,9 @@ def scrape_metadata(
                 )
                 continue
 
-            for channel, channel_dir in get_channel_dirs(xrd_fs, sample_dir):
+            for channel, channel_dir in get_channel_dirs(
+                xrd_fs, sample_dir
+            ).items():
                 # Get the main filelist for this sample
                 main_files = get_files(xrd_fs, channel_dir)
 
@@ -181,13 +183,13 @@ def scrape_metadata(
                     # Check if campaign is skipped
                     if (
                         friend.include_campaigns
-                        and campaign not in friend.include_campaigns
+                        and campaign.name not in friend.include_campaigns
                     ) or (
                         friend.exclude_campaigns
-                        and campaign in friend.exclude_campaigns
+                        and campaign.name in friend.exclude_campaigns
                     ):
                         logger.info(
-                            f"Skipping friend {friend.name} for campaign {campaign}."
+                            f"Skipping friend {friend.name} for campaign {campaign.name}."
                         )
                         continue
 
@@ -196,7 +198,7 @@ def scrape_metadata(
                         friend.include_samples
                         and not any(
                             re.search(pattern, sample)
-                            for pattern in friend.exclude_samples
+                            for pattern in friend.include_samples
                         )
                     ) or (
                         friend.exclude_samples
@@ -224,16 +226,15 @@ def scrape_metadata(
                 shifts = get_shifts(main_files, friend_files)
 
                 # Create the sample object
-                sample = Sample(
-                    era=era,
-                    sample=sample,
-                    channel=channel,
-                    main_files=main_files,
-                    friend_files=friend_files,
-                    shifts=shifts,
+                sample_metadata.append(
+                    Sample(
+                        era=era,
+                        sample=sample,
+                        channel=channel,
+                        main_files=main_files,
+                        friend_files=friend_files,
+                        shifts=shifts,
+                    )
                 )
 
-                # Append the sample to the list of samples
-                samples.append(sample)
-
-    return samples
+    return sample_metadata
