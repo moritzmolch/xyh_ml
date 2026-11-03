@@ -70,7 +70,11 @@ def get_files(
 
     # Get sorted list of ROOT files (ntuple trees)
     ntuple_files = sorted(
-        os.path.join(channel_dir, f) for f in listing if f.endswith(".root")
+        str(xrd_fs.url).rstrip("/")
+        + "//"
+        + os.path.join(channel_dir, f).lstrip("/")
+        for f in listing
+        if f.endswith(".root")
     )
 
     return ntuple_files
@@ -79,6 +83,7 @@ def get_files(
 def get_friend_files(
     xrd_fs: FileSystem,
     base_dir: str,
+    ntuple_tag: str,
     friend_name: str,
     era: str,
     sample: str,
@@ -86,7 +91,13 @@ def get_friend_files(
 ) -> list[str]:
     # Construct friend NTuple directory path
     friend_dir = os.path.join(
-        base_dir, FRIEND_NTUPLE_DIR_NAME, friend_name, era, sample, channel
+        base_dir,
+        ntuple_tag,
+        FRIEND_NTUPLE_DIR_NAME,
+        friend_name,
+        era,
+        sample,
+        channel,
     )
 
     # Get available files from the directory listing of the channel directory
@@ -94,7 +105,11 @@ def get_friend_files(
 
     # Get sorted list of ROOT files (ntuple trees)
     ntuple_files = sorted(
-        os.path.join(friend_dir, f) for f in listing if f.endswith(".root")
+        str(xrd_fs.url).rstrip("/")
+        + "//"
+        + os.path.join(friend_dir, f).lstrip("/")
+        for f in listing
+        if f.endswith(".root")
     )
 
     return ntuple_files
