@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import hydra
+import pandas as pd
 import uproot
 
 from xyh_ml import PROJECT_DIR
@@ -122,6 +123,98 @@ def determine_chunks(
     )
 
     return chunks
+
+
+def _read_tree_slice(
+    file: str,
+    columns: list[str],
+    file_slice: FileSlice,
+    tree: str = "ntuple",
+) -> pd.DataFrame:
+    """Read those of ``columns`` that exist in ``tree`` of ``file`` for the
+    entry range of ``file_slice`` into a data frame with a fresh
+    ``RangeIndex``. Columns missing in the tree are not included."""
+    with uproot.open(file) as f:
+        if tree not in f:
+            msg = f"File {file} does not contain '{tree}' tree."
+            logger.error(msg)
+            raise KeyError(msg)
+        t = f[tree]
+
+        # Friend trees are aligned entry by entry with the main tree, so the
+        # entry range must be valid in every tree
+        if t.num_entries < file_slice.entry_stop:
+            msg = (
+                f"Tree '{tree}' in {file} has {t.num_entries} entries, but "
+                + f"entries up to {file_slice.entry_stop} of "
+                + f"{file_slice.main_file} are requested."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        keys = set(t.keys())
+        available = [c for c in columns if c in keys]
+        if not available:
+            return pd.DataFrame(index=range(file_slice.num_entries))
+
+        return t.arrays(
+            available,
+            entry_start=file_slice.entry_start,
+            entry_stop=file_slice.entry_stop,
+            library="pd",
+        ).reset_index(drop=True)
+
+
+def load_data_frame(
+    chunk: Chunk,
+    columns: list[str],
+) -> pd.DataFrame:
+    """Load a data frame for a :class:`Chunk` object.
+
+    For each :class:`FileSlice` of the chunk, the requested columns are read
+    from the main file and all friend files and joined side by side; only the
+    entries in the range ``[entry_start, entry_stop)`` are included. Each
+    column is taken from the first tree that holds it (main file first, then
+    the friends in order). The slices are then concatenated into a single
+    data frame with the additional columns ``chunk`` (chunk index) and
+    ``entry`` (entry number in the main file).
+    """
+
+    # Add data frame for each slice of the chunk to a list, then concatenate them
+    data_frames = []
+
+    for slice in chunk.slices:
+        # Read each requested column from the first tree that contains it
+        remaining = list(dict.fromkeys(columns))
+        frames = []
+        for file in [slice.main_file, *slice.friend_files.values()]:
+            df = _read_tree_slice(file, remaining, slice)
+            remaining = [c for c in remaining if c not in df.columns]
+            frames.append(df)
+
+        if remaining:
+            msg = (
+                f"Columns {remaining} not found in {slice.main_file} or its "
+                + f"friend files {list(slice.friend_files.values())}."
+            )
+            logger.error(msg)
+            raise KeyError(msg)
+
+        # Join main and friend columns and restore the requested order
+        df = pd.concat(frames, axis=1)[list(dict.fromkeys(columns))]
+
+        # Add chunk index and entry information to the data frame
+        df["chunk"] = chunk.index
+        df["entry"] = range(slice.entry_start, slice.entry_stop)
+
+        data_frames.append(df)
+
+    if not data_frames:
+        return pd.DataFrame(
+            columns=[*dict.fromkeys(columns), "chunk", "entry"]
+        )
+
+    return pd.concat(data_frames, ignore_index=True)
 
 
 @hydra.main(
