@@ -1,0 +1,63 @@
+"""Shared fixtures for the friend production tests."""
+
+from types import SimpleNamespace
+
+import awkward as ak  # noqa: F401  (ensures uproot's awkward backend loads)
+import numpy as np
+import pytest
+import uproot
+
+
+class FakeFileSystem:
+    """Minimal stand-in for ``XRootD.client.FileSystem``.
+
+    ``listings`` maps a directory path to the list of entry names it holds.
+    Unknown paths yield a failing status. All calls are recorded.
+    """
+
+    def __init__(self, listings):
+        self.listings = listings
+        self.calls = []
+
+    def dirlist(self, path, flags=None):
+        self.calls.append((path, flags))
+        if path not in self.listings:
+            status = SimpleNamespace(ok=False, message=f"no such dir {path}")
+            return status, None
+        listing = [SimpleNamespace(name=n) for n in self.listings[path]]
+        return SimpleNamespace(ok=True, message=""), listing
+
+
+@pytest.fixture
+def fake_fs_factory():
+    """Return a factory building a :class:`FakeFileSystem`."""
+
+    def factory(listings=None):
+        return FakeFileSystem(dict(listings or {}))
+
+    return factory
+
+
+@pytest.fixture
+def make_root_file(tmp_path):
+    """Factory writing a tiny ROOT file with a tree called ``ntuple``.
+
+    ``kind`` is ``"filled"`` (default), ``"empty"`` (tree without entries) or
+    ``"no_tree"`` (file containing a differently named tree).
+    """
+
+    def factory(name, branches=("pt",), entries=3, kind="filled"):
+        path = tmp_path / name
+        with uproot.recreate(path) as f:
+            if kind == "no_tree":
+                f["other"] = {"x": np.arange(2, dtype="float64")}
+            elif kind == "empty":
+                f.mktree("ntuple", {b: "float64" for b in branches})
+            else:
+                data = {
+                    b: np.arange(entries, dtype="float64") for b in branches
+                }
+                f["ntuple"] = data
+        return str(path)
+
+    return factory
