@@ -64,7 +64,7 @@ def get_channel_dirs(
 def get_files(
     xrd_fs: FileSystem,
     channel_dir: str,
-) -> dict[str, str]:
+) -> list[str]:
     # Get available files from the directory listing of the channel directory
     listing = xrd_ls(xrd_fs, channel_dir)
 
@@ -83,17 +83,14 @@ def get_friend_files(
     era: str,
     sample: str,
     channel: str,
-) -> dict[str, str]:
+) -> list[str]:
     # Construct friend NTuple directory path
     friend_dir = os.path.join(
         base_dir, FRIEND_NTUPLE_DIR_NAME, friend_name, era, sample, channel
     )
 
     # Get available files from the directory listing of the channel directory
-    listing = xrd_ls(
-        xrd_fs,
-        os.path.join(base_dir, FRIEND_NTUPLE_DIR_NAME, friend_dir),
-    )
+    listing = xrd_ls(xrd_fs, friend_dir)
 
     # Get sorted list of ROOT files (ntuple trees)
     ntuple_files = sorted(
