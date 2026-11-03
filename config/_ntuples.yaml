@@ -1,0 +1,21 @@
+ntuple_tag: "ntuples-2026-10-08"
+xrootd_server: "root://cmsdcache-kit-disk.gridka.de:1094"
+base_dir: "/store/user/mmolch/CROWN/ntuples"
+friends:
+- name: "fake-factors-2026-10-25"
+  include_channels: ["et", "mt", "tt"]
+  exclude_samples: ["^NMSSM.*$"]
+- name: "kinfit-2026-10-09"
+  include_channels: ["et", "mt", "tt"]
+- name: "fastmtt-2026-10-09"
+  include_campaigns: ["2024_nano_v15"]
+  include_channels: ["et", "mt", "tt"]
+- name: "fastmtt-2026-10-12"
+  include_campaigns: ["2022_pre_ee_nano_v12", "2022_post_ee_nano_v12", "2023_pre_bpix_nano_v12", "2023_post_bpix_nano_v12", "2025_nano_v15"]
+  include_channels: ["et", "mt", "tt"]
+
+# Optional: List of samples to process. If no `samples` list is provided, all
+# samples found in the ntuple directories of the campaigns above will be
+# processed.
+samples:
+- NMSSM_XtoYHto2B2Tau_MX-2500_MY-800_TuneCP5_13p6TeV_madgraph-pythia8_Run3Summer22NanoAODv12-130X_mcRun3_2022_realistic_v5-v2
