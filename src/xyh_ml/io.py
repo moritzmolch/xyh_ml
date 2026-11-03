@@ -60,6 +60,28 @@ def dump_transformations(
     )
 
 
+def load_transformations(input_file: Path):
+    """
+    Deserialize transformation objects from a pickle file.
+
+    Parameters
+    ----------
+    input_file : Path
+        Path to the pickle file containing the serialized transformations.
+
+    Returns
+    -------
+    transformations : object
+        The deserialized transformation objects. For more information, see the
+        `xyh_ml.cli.train_classifier.derive_transformations` function.
+    """
+    # Deserialize transformation objects
+    with input_file.open(mode="rb") as f:
+        transformations = pickle.load(f)
+    logger.debug(f"Loaded transformations from {input_file}")
+    return transformations
+
+
 def dump_metrics(
     output_file: Path,
     metrics: list[dict[str, Any]],
