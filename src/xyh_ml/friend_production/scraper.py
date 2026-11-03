@@ -25,6 +25,7 @@ def get_shifts(
 ) -> list[Shift]:
     ntuple_keys = []
     for i, main_file in enumerate(main_files):
+        print(main_file)
         with uproot.open(main_file) as f:
             # Check if the ntuple tree exists and if it has entries
             if "ntuple" not in f:
@@ -45,6 +46,7 @@ def get_shifts(
         # Get the corresponding friends and extract their keys as well
         for friend_name, friend_file_list in friend_files.items():
             friend_file = friend_file_list[i]
+            print(friend_file)
             with uproot.open(friend_file) as f:
                 # Check if the friend ntuple tree exists and if it has entries
                 if "ntuple" not in f:
@@ -140,12 +142,11 @@ def scrape_metadata(
     ).items():
         # If era is not in the campaigns list, raise an error
         if era not in eras_lookup:
-            msg = (
-                f"Era '{era}' found in the directory structure but not in the "
-                + "list of campaigns."
+            logger.warning(
+                f"Folder '{era}' ignored as it is not appearing in the list "
+                "of campaigns",
             )
-            logger.error(msg)
-            raise ValueError(msg)
+            continue
 
         # Get the campaign
         campaign = eras_lookup[era]
@@ -225,6 +226,7 @@ def scrape_metadata(
                     friend_files[friend.name] = get_friend_files(
                         xrd_fs,
                         base_dir,
+                        ntuple_tag,
                         friend.name,
                         era,
                         sample,
