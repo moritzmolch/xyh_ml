@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 import uproot
-
 from omegaconf import DictConfig, OmegaConf
 
 from xyh_ml import PROJECT_DIR
@@ -357,10 +356,10 @@ def _process_fold(
 
     # Store the predictions and the class with maximum score in the
     # fold data frame
-    fold_data_frame[score_columns] = predictions
     max_score_index = np.argmax(predictions, axis=1)
+    max_score = predictions[max_score_index]
+    fold_data_frame["max_score"] = max_score
     fold_data_frame["max_score_index"] = max_score_index
-    fold_data_frame["max_score_name"] = class_names[max_score_index]
 
     return fold_data_frame
 
