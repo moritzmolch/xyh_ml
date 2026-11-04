@@ -168,14 +168,39 @@ def test_main_default_output_file(setup, tmp_path):
         assert f["ntuple"].num_entries == N_EVENTS
 
 
-def test_main_rejects_other_channel(setup):
+@pytest.mark.parametrize("channel", ["mt", "tt"])
+def test_main_infers_channel_from_input_file(setup, channel):
     cfg, output_file = setup
+    # The input file belongs to channel et and models exist only for et:
+    # a different mode.channel must not be used to load the models
+    cfg.mode.channel = channel
+
+    produce.main(cfg)
+
+    with uproot.open(output_file) as f:
+        assert f["ntuple"].num_entries == N_EVENTS
+
+
+def test_main_infers_channel_for_default_output_file(setup, tmp_path):
+    cfg, _ = setup
     cfg.mode.channel = "mt"
-    # Point the models to a missing directory: the channel check has to
+    cfg.output_file = None
+    cfg.output_dir = str(tmp_path / "friends")
+
+    produce.main(cfg)
+
+    assert (tmp_path / "friends" / "2024" / "DY" / "et" / "f_0.root").exists()
+    assert not (tmp_path / "friends" / "2024" / "DY" / "mt").exists()
+
+
+def test_main_unknown_input_file_fails_before_loading_models(setup):
+    cfg, output_file = setup
+    cfg.input_file = "ntuples/2024/DY/et/f_9.root"
+    # Point the models to a missing directory: the input file lookup has to
     # fail before any model is loaded
     cfg.artifacts.training_dir = "/nonexistent"
 
-    with pytest.raises(ValueError, match="belongs to channel et"):
+    with pytest.raises(ValueError, match="not found"):
         produce.main(cfg)
 
     assert not output_file.exists()

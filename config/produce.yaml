@@ -21,8 +21,8 @@ metadata_file: data/output/friends/${ntuple.tag}/metadata/metadata.json.gz
 # Main ntuple file to produce the friend file for. Must be one of the main
 # files in the metadata file, given either as full path (including the XRootD
 # server) or as a trailing part of it that matches exactly one main file. The
-# file must belong to the channel `mode.channel`, for which the models are
-# loaded.
+# analysis channel is taken from the sample of the file and replaces
+# `mode.channel`, so that the models trained for this channel are loaded.
 input_file: ???
 
 # Name of the friend. By default, the output file is written to

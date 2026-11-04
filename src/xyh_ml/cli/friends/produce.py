@@ -563,16 +563,15 @@ def write_friend_file(
 def select_input_file(
     samples: list[Sample],
     input_file: str,
-    channel: str,
 ) -> Sample:
     """Find ``input_file`` among the main files of ``samples`` and return a
     sample that only holds this main file and its friend files.
 
     ``input_file`` is either the full path of a main file as stored in the
     metadata or a trailing part of it (e.g. the path without the XRootD
-    server) that matches exactly one main file. The sample of the file must
-    belong to the analysis ``channel``, as the models are trained per
-    channel.
+    server) that matches exactly one main file. Era, sample name and
+    analysis channel of the returned sample are those of the sample the file
+    belongs to.
     """
     exact = [
         (sample, i)
@@ -601,14 +600,6 @@ def select_input_file(
         raise ValueError(msg)
 
     sample, i = matches[0]
-    if sample.channel != channel:
-        msg = (
-            f"Input file {input_file} belongs to channel {sample.channel}, "
-            + f"but the friend production runs for channel {channel}."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-
     return dataclasses.replace(
         sample,
         main_files=[sample.main_files[i]],
@@ -704,10 +695,24 @@ def produce_friend(
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Find the input file in the sample metadata and check that it belongs to
-    # the channel the friend is produced for. Done first to fail early.
+    # Find the input file in the sample metadata. Done first to fail early.
     samples = [Sample.from_dict(s) for s in load_json(Path(cfg.metadata_file))]
-    sample = select_input_file(samples, cfg.input_file, cfg.mode.channel)
+    sample = select_input_file(samples, cfg.input_file)
+
+    # The analysis channel is that of the input file. Set it in the
+    # configuration, so that the models trained for this channel are loaded
+    # (artifacts.training_dir is interpolated from mode.channel). mode.channel
+    # always has a default value, so a different value is only logged.
+    if cfg.mode.channel != sample.channel:
+        logger.info(
+            f"Using channel {sample.channel} of input file {cfg.input_file} "
+            + f"instead of mode.channel={cfg.mode.channel}."
+        )
+    cfg = OmegaConf.merge(cfg, {"mode": {"channel": sample.channel}})
+    logger.info(
+        f"Producing friend for sample {sample.sample}, era {sample.era}, "
+        + f"channel {sample.channel}"
+    )
 
     # Output file, by default following the CROWN friend directory layout
     if cfg.output_file:

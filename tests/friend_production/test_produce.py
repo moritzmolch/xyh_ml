@@ -465,7 +465,7 @@ def test_process_fold_max_score_per_event(transformations):
 
     # Expected softmax from the standardized pt (mean 25, std sqrt(125) of
     # the training data of the transformations fixture)
-    pt =(events["pt"].to_numpy() - 25.0) / np.sqrt(125.0)
+    pt = (events["pt"].to_numpy() - 25.0) / np.sqrt(125.0)
     logits = np.stack([np.zeros_like(pt), -pt, pt], axis=1)
     probs = np.exp(logits) / np.exp(logits).sum(axis=1, keepdims=True)
     np.testing.assert_allclose(df["max_score"], probs.max(axis=1), rtol=1e-5)
@@ -813,7 +813,7 @@ def test_select_input_file_full_path():
     samples = _metadata_samples()
     input_file = f"{SERVER}/store/ntuples/2025/TT/mt/f_1.root"
 
-    sample = produce.select_input_file(samples, input_file, "mt")
+    sample = produce.select_input_file(samples, input_file)
 
     assert (sample.era, sample.sample, sample.channel) == ("2025", "TT", "mt")
     assert sample.main_files == [input_file]
@@ -828,7 +828,7 @@ def test_select_input_file_full_path():
     ["/store/ntuples/2024/DY/et/f_0.root", "ntuples/2024/DY/et/f_0.root"],
 )
 def test_select_input_file_trailing_path(input_file):
-    sample = produce.select_input_file(_metadata_samples(), input_file, "et")
+    sample = produce.select_input_file(_metadata_samples(), input_file)
 
     assert sample.main_files == [f"{SERVER}/store/ntuples/2024/DY/et/f_0.root"]
 
@@ -837,7 +837,7 @@ def test_select_input_file_keeps_metadata():
     samples = _metadata_samples()
     before = [dataclasses.replace(s) for s in samples]
 
-    produce.select_input_file(samples, "ntuples/2024/DY/et/f_0.root", "et")
+    produce.select_input_file(samples, "ntuples/2024/DY/et/f_0.root")
 
     assert samples == before
 
@@ -845,32 +845,37 @@ def test_select_input_file_keeps_metadata():
 def test_select_input_file_not_found():
     with pytest.raises(ValueError, match="not found"):
         produce.select_input_file(
-            _metadata_samples(), "ntuples/2024/DY/et/f_9.root", "et"
+            _metadata_samples(), "ntuples/2024/DY/et/f_9.root"
         )
 
 
 def test_select_input_file_ambiguous():
     with pytest.raises(ValueError, match="matches several"):
-        produce.select_input_file(_metadata_samples(), "f_0.root", "et")
+        produce.select_input_file(_metadata_samples(), "f_0.root")
 
 
 def test_select_input_file_partial_file_name_does_not_match():
     with pytest.raises(ValueError, match="not found"):
         produce.select_input_file(
-            _metadata_samples(), "ntuples/2024/DY/et/_0.root", "et"
+            _metadata_samples(), "ntuples/2024/DY/et/_0.root"
         )
 
 
-def test_select_input_file_wrong_channel():
-    with pytest.raises(ValueError, match="belongs to channel mt"):
-        produce.select_input_file(
-            _metadata_samples(), "ntuples/2024/DY/mt/f_0.root", "et"
-        )
+@pytest.mark.parametrize("channel", ["et", "mt"])
+def test_select_input_file_channel_from_file(channel):
+    sample = produce.select_input_file(
+        _metadata_samples(), f"ntuples/2024/DY/{channel}/f_0.root"
+    )
+
+    assert sample.channel == channel
+    assert sample.friend_files["kinfit"] == [
+        f"{SERVER}/store/friends/kinfit/2024/DY/{channel}/f_0.root"
+    ]
 
 
 def test_default_output_file():
     sample = produce.select_input_file(
-        _metadata_samples(), "ntuples/2025/TT/et/f_1.root", "et"
+        _metadata_samples(), "ntuples/2025/TT/et/f_1.root"
     )
 
     output_file = produce.default_output_file(Path("out/friend"), sample)
