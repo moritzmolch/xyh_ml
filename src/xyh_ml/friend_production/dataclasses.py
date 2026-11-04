@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -21,6 +22,26 @@ class Sample:
     main_files: list[str]
     friend_files: dict[str, list[str]]
     shifts: list[Shift]
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Sample":
+        """Create a sample from its dictionary representation (e.g. from
+        ``dataclasses.asdict`` or the metadata JSON file), converting the
+        nested shifts and variables to dataclass objects."""
+        return cls(
+            era=d["era"],
+            sample=d["sample"],
+            channel=d["channel"],
+            main_files=list(d["main_files"]),
+            friend_files={k: list(v) for k, v in d["friend_files"].items()},
+            shifts=[
+                Shift(
+                    name=s["name"],
+                    variables=[Variable(**v) for v in s["variables"]],
+                )
+                for s in d["shifts"]
+            ],
+        )
 
 
 @dataclass

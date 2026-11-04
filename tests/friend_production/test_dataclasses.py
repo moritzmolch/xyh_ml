@@ -60,3 +60,18 @@ def test_friend_rejects_include_and_exclude(kind):
 def test_friend_allows_include_and_exclude_of_different_kinds():
     f = Friend(name="f", include_channels=["et"], exclude_samples=["x"])
     assert f.include_channels == ["et"]
+
+
+def test_sample_from_dict_roundtrip():
+    s = Sample(
+        era="2018",
+        sample="A",
+        channel="et",
+        main_files=["m.root"],
+        friend_files={"f": ["f.root"]},
+        shifts=[Shift(name="jesUp", variables=[Variable("pt", "c")])],
+    )
+    restored = Sample.from_dict(dataclasses.asdict(s))
+    assert restored == s
+    assert isinstance(restored.shifts[0], Shift)
+    assert isinstance(restored.shifts[0].variables[0], Variable)
