@@ -1,7 +1,9 @@
 import logging
 import os
+import re
+from pathlib import Path
 
-from XRootD.client import FileSystem
+from XRootD.client import CopyProcess, FileSystem
 from XRootD.client.flags import DirListFlags
 
 # Set up logging
@@ -124,3 +126,66 @@ def get_friend_files(
     )
 
     return ntuple_files
+
+
+def is_xrootd_url(path: str | Path) -> bool:
+    """Whether ``path`` is an XRootD URL (``root://server//path``)."""
+    return isinstance(path, str) and path.startswith(("root://", "xroot://"))
+
+
+def xrootd_url(server: str, path: str) -> str:
+    """URL of the absolute ``path`` on ``server``, e.g.
+    ``root://server:1094//store/file.root``."""
+    return f"{server.rstrip('/')}//{path.lstrip('/')}"
+
+
+def split_xrootd_url(url: str) -> tuple[str, str]:
+    """Server and absolute path of an XRootD URL."""
+    m = re.fullmatch(r"(x?root://[^/]+)//?(/?[^/].*)", url)
+    if not m:
+        msg = f"Not an XRootD URL with a path: {url}"
+        logger.error(msg)
+        raise ValueError(msg)
+    return m[1], "/" + m[2].lstrip("/")
+
+
+def xrd_exists(url: str) -> bool:
+    """Whether the file or directory ``url`` exists."""
+    server, path = split_xrootd_url(url)
+    status, _ = FileSystem(server).stat(path)
+    if status.ok:
+        return True
+    if status.errno == XRD_NOT_FOUND:
+        return False
+    msg = f"Failed to check whether {url} exists: {status.message}"
+    logger.error(msg)
+    raise RuntimeError(msg)
+
+
+def xrd_upload(local_file: Path, url: str):
+    """Copy ``local_file`` to ``url``, replacing an existing file.
+
+    Missing directories are created. The checksums (adler32) of source and
+    target are compared, and the target is only kept if the copy succeeded
+    (persist on successful close), so that no incomplete file is left.
+    """
+    process = CopyProcess()
+    process.add_job(
+        str(local_file),
+        url,
+        force=True,
+        posc=True,
+        mkdir=True,
+        checksummode="end2end",
+        checksumtype="adler32",
+        rmBadCksum=True,
+    )
+    status = process.prepare()
+    if status.ok:
+        status, results = process.run()
+        if status.ok and results and not results[0]["status"].ok:
+            status = results[0]["status"]
+    if not status.ok:
+        msg = f"Failed to copy {local_file} to {url}: {status.message}"
+        logger.error(msg)
+        raise RuntimeError(msg)
