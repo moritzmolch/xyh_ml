@@ -53,6 +53,15 @@ output_dir: data/output/friends/${ntuple.tag}/CROWNFriend/${friend_name}
 # Only possible together with `input_file`.
 output_file: null
 
+# Tag of the NN friend on the XRootD server. If set, the friend files are
+# uploaded to the friend directory `<nn_friend_tag>-<decay mode>` next to the
+# other friends of the ntuples (`output_dir` is not used):
+# <ntuple.xrootd_server>//<ntuple.base_dir>/<ntuple.tag>/CROWNFriend/
+#   <nn_friend_tag>-<mode.decay_mode>/<era>/<sample>/<channel>/<file name>
+# The files are written to a temporary directory in `staging_dir` first.
+nn_friend_tag: null
+staging_dir: data/output/friends/staging
+
 # Optional JSON file for the profile of the friend production (time per stage
 # per event and per row, data frame sizes, peak memory). The profile is always
 # logged.

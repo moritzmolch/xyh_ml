@@ -956,6 +956,83 @@ def test_as_list(value, expected):
     assert produce._as_list(value) == expected
 
 
+def test_default_output_file_remote():
+    sample = produce.select_input_file(
+        _metadata_samples(), "ntuples/2025/TT/et/f_1.root"
+    )
+    output_dir = "root://server:1094//store/CROWNFriend/pnn-y2b_h2tau"
+
+    assert produce.default_output_file(output_dir, sample) == (
+        f"{output_dir}/2025/TT/et/f_1.root"
+    )
+    assert produce.default_output_file(output_dir + "/", sample) == (
+        f"{output_dir}/2025/TT/et/f_1.root"
+    )
+
+
+def _output_cfg(nn_friend_tag=None, friends=("kinfit-2026-10-09",)):
+    return OmegaConf.create(
+        {
+            "output_dir": "data/output/friends/local",
+            "nn_friend_tag": nn_friend_tag,
+            "mode": {"decay_mode": "y2b_h2tau"},
+            "ntuple": {
+                "xrootd_server": "root://server:1094",
+                "base_dir": "/store/user/me/ntuples/",
+                "tag": "ntuples-2026-10-08",
+                "friends": [{"name": f} for f in friends],
+            },
+        }
+    )
+
+
+def test_resolve_output_dir_local():
+    assert produce.resolve_output_dir(_output_cfg()) == Path(
+        "data/output/friends/local"
+    )
+
+
+def test_resolve_output_dir_without_option():
+    """Configs without nn_friend_tag write locally."""
+    cfg = _output_cfg()
+    del cfg["nn_friend_tag"]
+
+    assert produce.resolve_output_dir(cfg) == Path("data/output/friends/local")
+
+
+def test_resolve_output_dir_nn_friend_tag():
+    assert produce.resolve_output_dir(_output_cfg("pnn-2026-11-04")) == (
+        "root://server:1094//store/user/me/ntuples/ntuples-2026-10-08/"
+        + "CROWNFriend/pnn-2026-11-04-y2b_h2tau"
+    )
+
+
+@pytest.mark.parametrize("tag", ["", "a/b", "../x", "-x", "a b"])
+def test_resolve_output_dir_invalid_tag(tag):
+    with pytest.raises(ValueError, match="Invalid nn_friend_tag"):
+        produce.resolve_output_dir(_output_cfg(tag))
+
+
+def test_resolve_output_dir_input_friend_name():
+    cfg = _output_cfg("kinfit", friends=["kinfit-y2b_h2tau"])
+
+    with pytest.raises(ValueError, match="input friend"):
+        produce.resolve_output_dir(cfg)
+
+
+def test_friend_exists(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        produce, "xrd_exists", lambda url: calls.append(url) or True
+    )
+    (tmp_path / "f.root").touch()
+
+    assert produce.friend_exists(tmp_path / "f.root")
+    assert not produce.friend_exists(tmp_path / "g.root")
+    assert produce.friend_exists("root://server//store/f.root")
+    assert calls == ["root://server//store/f.root"]
+
+
 def test_default_output_file():
     sample = produce.select_input_file(
         _metadata_samples(), "ntuples/2025/TT/et/f_1.root"

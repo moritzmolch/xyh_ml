@@ -499,3 +499,146 @@ def test_main_invalid_input_selection(
 
     with pytest.raises(ValueError, match=match):
         produce.main(cfg)
+
+
+# ------------------------------------------------------- upload to XRootD
+
+REMOTE = "root://server.example:1094"
+
+
+@pytest.fixture
+def fake_remote(tmp_path, monkeypatch):
+    """Store "uploaded" files in a local directory instead of the XRootD
+    server. Returns that directory and the list of uploads."""
+    remote_dir = tmp_path / "remote"
+    uploads = []
+
+    def local_path(url):
+        assert url.startswith(REMOTE + "//")
+        return remote_dir / url[len(REMOTE + "//") :]
+
+    def upload(local_file, url):
+        # The staged file is complete when it is uploaded
+        assert local_file.exists() and local_file.parent.name.startswith(
+            "produce_"
+        )
+        uploads.append((local_file, url))
+        target = local_path(url)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(local_file.read_bytes())
+
+    monkeypatch.setattr(produce, "xrd_upload", upload)
+    monkeypatch.setattr(
+        produce, "xrd_exists", lambda url: local_path(url).exists()
+    )
+    return remote_dir, uploads
+
+
+def _remote_mode(cfg, tmp_path, **selection):
+    cfg = _sample_mode(cfg, tmp_path, **selection)
+    cfg.nn_friend_tag = "pnn-test"
+    cfg.ntuple.xrootd_server = REMOTE
+    cfg.ntuple.base_dir = "/store/user/me/ntuples"
+    cfg.staging_dir = str(tmp_path / "staging")
+    return cfg
+
+
+def _remote_friends(remote_dir, cfg):
+    return (
+        remote_dir
+        / "store/user/me/ntuples"
+        / cfg.ntuple.tag
+        / "CROWNFriend"
+        / f"pnn-test-{cfg.mode.decay_mode}"
+    )
+
+
+def test_main_uploads_friends_with_nn_friend_tag(setup, tmp_path, fake_remote):
+    remote_dir, uploads = fake_remote
+    cfg = _remote_mode(setup[0], tmp_path, sample="DY")
+
+    produce.main(cfg)
+
+    friends = _remote_friends(remote_dir, cfg) / "2024" / "DY"
+    assert sorted(
+        str(p.relative_to(friends)) for p in friends.rglob("*.root")
+    ) == ["et/f_0.root", "et/f_1.root", "mt/f_0.root"]
+    assert len(uploads) == 3
+    # Nothing is written to the local output directory, and the staging
+    # directory is cleaned up
+    assert not (tmp_path / "friends").exists()
+    assert list((tmp_path / "staging").iterdir()) == []
+
+    # The uploaded friend equals the locally written one
+    local_cfg = _sample_mode(setup[0], tmp_path, sample="DY")
+    local_cfg.nn_friend_tag = None
+    produce.main(local_cfg)
+    local = _friend_arrays(tmp_path / "friends/2024/DY/et/f_0.root")
+    remote = _friend_arrays(friends / "et" / "f_0.root")
+    for key, value in local.items():
+        np.testing.assert_array_equal(remote[key], value)
+
+
+def test_main_upload_skip_existing_checks_remote(setup, tmp_path, fake_remote):
+    remote_dir, uploads = fake_remote
+    cfg = _remote_mode(setup[0], tmp_path, sample="DY", channel="et")
+    existing = _remote_friends(remote_dir, cfg) / "2024/DY/et/f_0.root"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"old")
+    cfg.skip_existing = True
+
+    produce.main(cfg)
+
+    assert [url.rsplit("/", 2)[-2:] for _, url in uploads] == [
+        ["et", "f_1.root"]
+    ]
+    assert existing.read_bytes() == b"old"
+
+
+def test_main_upload_failure_continues_and_cleans_up(
+    setup, tmp_path, fake_remote, monkeypatch
+):
+    _, uploads = fake_remote
+    upload = produce.xrd_upload
+
+    def failing_upload(local_file, url):
+        if url.endswith("et/f_0.root"):
+            raise RuntimeError("upload failed")
+        upload(local_file, url)
+
+    monkeypatch.setattr(produce, "xrd_upload", failing_upload)
+    cfg = _remote_mode(setup[0], tmp_path, sample="DY")
+
+    with pytest.raises(RuntimeError, match="1 file"):
+        produce.main(cfg)
+
+    assert len(uploads) == 2
+    assert list((tmp_path / "staging").iterdir()) == []
+
+
+def test_main_nn_friend_tag_with_output_file(setup):
+    cfg, _ = setup
+    cfg.nn_friend_tag = "pnn-test"
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="output_file can not be set"):
+        produce.main(cfg)
+
+
+def test_produce_config_nn_friend_tag_from_command_line():
+    with initialize_config_dir(
+        str(PROJECT_DIR / "config"), version_base="1.3"
+    ):
+        cfg = compose(
+            "produce",
+            overrides=[
+                "nn_friend_tag=pnn-2026-11-04",
+                "inputs=y2tau_h2b",
+                "mode.decay_mode=y2tau_h2b",
+            ],
+        )
+
+    assert produce.resolve_output_dir(cfg) == (
+        f"{cfg.ntuple.xrootd_server}//{cfg.ntuple.base_dir.strip('/')}/"
+        + f"{cfg.ntuple.tag}/CROWNFriend/pnn-2026-11-04-y2tau_h2b"
+    )

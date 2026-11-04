@@ -1,5 +1,8 @@
+import contextlib
 import dataclasses
 import logging
+import re
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,13 @@ from xyh_ml.data.data_frame import prepare_with_parameter_values
 from xyh_ml.data.torch import create_torch_dataset_for_evaluation
 from xyh_ml.friend_production.dataclasses import Chunk, FileSlice, Sample
 from xyh_ml.friend_production.profiling import Profiler
+from xyh_ml.friend_production.xrootd import (
+    FRIEND_NTUPLE_DIR_NAME,
+    is_xrootd_url,
+    xrd_exists,
+    xrd_upload,
+    xrootd_url,
+)
 from xyh_ml.io import load_json, load_transformations
 from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 from xyh_ml.nn.predictions import predict
@@ -704,13 +714,70 @@ def select_sample_files(
     ]
 
 
-def default_output_file(output_dir: Path, sample: Sample) -> Path:
+def default_output_file(output_dir: Path | str, sample: Sample) -> Path | str:
     """Output path mirroring the CROWN friend layout,
     ``<output_dir>/<era>/<sample>/<channel>/<file name of the main file>``.
+
+    ``output_dir`` is a local directory or an XRootD URL (see
+    :func:`resolve_output_dir`); the output path is of the same kind.
     """
     (main_file,) = sample.main_files
     file_name = main_file.rsplit("/", 1)[-1]
-    return output_dir / sample.era / sample.sample / sample.channel / file_name
+    parts = [sample.era, sample.sample, sample.channel, file_name]
+    if is_xrootd_url(output_dir):
+        return "/".join([output_dir.rstrip("/"), *parts])
+    return Path(output_dir).joinpath(*parts)
+
+
+def resolve_output_dir(cfg: DictConfig) -> Path | str:
+    """Directory of the friend files.
+
+    Without ``nn_friend_tag``, the local ``output_dir``. With it, the friend
+    directory ``<nn_friend_tag>-<decay mode>`` next to the other friends of
+    the ntuples on the XRootD server (as URL)::
+
+        <xrootd_server>//<base_dir>/<ntuple tag>/CROWNFriend/<name>
+    """
+    tag = cfg.get("nn_friend_tag")
+    if tag is None:
+        return Path(cfg.output_dir)
+
+    tag = str(tag)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", tag):
+        msg = (
+            f"Invalid nn_friend_tag {tag!r}: use letters, digits, '.', '_' "
+            + "and '-' only."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    friend_name = f"{tag}-{cfg.mode.decay_mode}"
+    if friend_name in {f.name for f in cfg.ntuple.friends}:
+        msg = (
+            f"Friend {friend_name} is an input friend of the ntuples "
+            + "(ntuple.friends); choose another nn_friend_tag."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    return xrootd_url(
+        cfg.ntuple.xrootd_server,
+        "/".join(
+            [
+                cfg.ntuple.base_dir.rstrip("/"),
+                cfg.ntuple.tag,
+                FRIEND_NTUPLE_DIR_NAME,
+                friend_name,
+            ]
+        ),
+    )
+
+
+def friend_exists(output_file: Path | str) -> bool:
+    """Whether the local or remote (XRootD URL) friend file exists."""
+    if is_xrootd_url(output_file):
+        return xrd_exists(output_file)
+    return Path(output_file).exists()
 
 
 def campaign_name(campaigns: list[Campaign], era: str) -> str:
@@ -859,11 +926,19 @@ def load_models(
 
 def _select_jobs(
     cfg: DictConfig, samples: list[Sample]
-) -> list[tuple[Sample, Path]]:
+) -> list[tuple[Sample, Path | str]]:
     """Single-file samples to process and their output files, either for
     ``input_file`` or for all files of ``sample``."""
     if (cfg.input_file is None) == (cfg.sample is None):
         msg = "Exactly one of input_file and sample has to be set."
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if cfg.output_file and cfg.get("nn_friend_tag") is not None:
+        msg = (
+            "output_file can not be set together with nn_friend_tag, which "
+            + "determines the output directory on the XRootD server."
+        )
         logger.error(msg)
         raise ValueError(msg)
 
@@ -896,12 +971,13 @@ def _select_jobs(
             channels=channels,
         )
 
+    output_dir = resolve_output_dir(cfg)
     return [
         (
             file_sample,
             Path(cfg.output_file)
             if cfg.output_file
-            else default_output_file(Path(cfg.output_dir), file_sample),
+            else default_output_file(output_dir, file_sample),
         )
         for file_sample in file_samples
     ]
@@ -919,14 +995,15 @@ def main(cfg: Config):
     logger.info(f"Producing friends for {len(jobs)} input file(s)")
 
     # Skip input files whose friend file exists already. Friend files are
-    # only moved to their output path when complete.
+    # only moved (or uploaded) to their output path when complete.
     if cfg.skip_existing:
-        existing = [job for job in jobs if job[1].exists()]
-        for sample, output_file in existing:
-            logger.info(
-                f"Skipping {sample.main_files[0]}: {output_file} exists"
-            )
-        jobs = [job for job in jobs if not job[1].exists()]
+        exists = [friend_exists(output_file) for _, output_file in jobs]
+        for (sample, output_file), e in zip(jobs, exists, strict=True):
+            if e:
+                logger.info(
+                    f"Skipping {sample.main_files[0]}: {output_file} exists"
+                )
+        jobs = [job for job, e in zip(jobs, exists, strict=True) if not e]
 
     # The analysis channel is that of the input file; load the models trained
     # for every channel that occurs (mode.channel is not used)
@@ -941,37 +1018,48 @@ def main(cfg: Config):
     parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
     columns = input_columns(cfg)
     failed = []
-    for i, (sample, output_file) in enumerate(jobs, start=1):
-        logger.info(
-            f"[{i}/{len(jobs)}] Sample {sample.sample}, era {sample.era}, "
-            + f"channel {sample.channel}: {sample.main_files[0]}"
+
+    # Friends for the XRootD server are written to a local staging directory
+    # of this process first and then uploaded
+    remote = any(is_xrootd_url(output_file) for _, output_file in jobs)
+    staging = contextlib.ExitStack()
+    if remote:
+        staging_root = Path(cfg.staging_dir)
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staging_dir = Path(
+            staging.enter_context(
+                tempfile.TemporaryDirectory(
+                    dir=staging_root, prefix="produce_"
+                )
+            )
         )
-        fold_models, fold_transformations = models[sample.channel]
-        try:
-            produce_friend(
-                sample,
-                output_file,
-                columns,
-                campaign_name(cfg.campaigns, sample.era),
-                cfg.inputs.variables,
-                cfg.inputs.parameters,
-                cfg.outputs.variables[0],
-                cfg.outputs.classes,
-                parameter_values,
-                fold_models,
-                fold_transformations,
-                cfg.mode.n_folds,
-                cfg.training.batch_size,
-                cfg.chunk_size,
-                profiler=profiler,
+        logger.info(f"Staging friends for upload in {staging_dir}")
+
+    with staging:
+        for i, (sample, output_file) in enumerate(jobs, start=1):
+            logger.info(
+                f"[{i}/{len(jobs)}] Sample {sample.sample}, era "
+                + f"{sample.era}, channel {sample.channel}: "
+                + f"{sample.main_files[0]}"
             )
-        except Exception:
-            # Continue with the other files and report the failures at the
-            # end
-            logger.exception(
-                f"Failed to produce friend for {sample.main_files[0]}"
-            )
-            failed.append(sample.main_files[0])
+            try:
+                _produce_and_store(
+                    cfg,
+                    sample,
+                    output_file,
+                    staging_dir if is_xrootd_url(output_file) else None,
+                    columns,
+                    parameter_values,
+                    models[sample.channel],
+                    profiler,
+                )
+            except Exception:
+                # Continue with the other files and report the failures at
+                # the end
+                logger.exception(
+                    f"Failed to produce friend for {sample.main_files[0]}"
+                )
+                failed.append(sample.main_files[0])
 
     # Report time per event and per row and the memory usage, summed over
     # all files
@@ -986,6 +1074,56 @@ def main(cfg: Config):
         msg = f"Failed to produce friends for {len(failed)} file(s): {failed}"
         logger.error(msg)
         raise RuntimeError(msg)
+
+
+def _produce_and_store(
+    cfg: DictConfig,
+    sample: Sample,
+    output_file: Path | str,
+    staging_dir: Path | None,
+    columns: list[str],
+    parameter_values: pd.DataFrame,
+    models: tuple[dict, dict],
+    profiler: Profiler,
+):
+    """Produce the friend of the single-file ``sample`` and store it at the
+    local path or XRootD URL ``output_file``.
+
+    Friends for an XRootD URL are written to ``staging_dir`` and uploaded;
+    the local file is removed afterwards. The upload time is added to the
+    stage ``upload`` of ``profiler``.
+    """
+    fold_models, fold_transformations = models
+    local_file = (
+        Path(output_file)
+        if staging_dir is None
+        else staging_dir / output_file.rsplit("/", 1)[-1]
+    )
+    try:
+        produce_friend(
+            sample,
+            local_file,
+            columns,
+            campaign_name(cfg.campaigns, sample.era),
+            cfg.inputs.variables,
+            cfg.inputs.parameters,
+            cfg.outputs.variables[0],
+            cfg.outputs.classes,
+            parameter_values,
+            fold_models,
+            fold_transformations,
+            cfg.mode.n_folds,
+            cfg.training.batch_size,
+            cfg.chunk_size,
+            profiler=profiler,
+        )
+        if staging_dir is not None:
+            with profiler.measure("upload"):
+                xrd_upload(local_file, output_file)
+            logger.info(f"Uploaded friend to {output_file}")
+    finally:
+        if staging_dir is not None:
+            local_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
