@@ -7,7 +7,10 @@ from pandas import DataFrame
 from torch.utils.data import TensorDataset
 
 from xyh_ml.config.dataclasses import Variable
-from xyh_ml.data.transformations import apply_transformations
+from xyh_ml.data.transformations import (
+    apply_transformations,
+    apply_transformations_to_unique_input_parameters,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -121,13 +124,15 @@ def create_torch_dataset_for_evaluation(
     transformations: dict[str, dict[str, Any]],
 ) -> TensorDataset:
     """
-    Prepare the training dataset by applying transformations and creating torch
-    tensors from the data frame. The dataset is returned as a `TensorDataset`
-    object, which can be used for efficient training and validation of `torch`
-    models.
+    Prepare a dataset for model evaluation by applying transformations and
+    creating torch tensors from the data frame. The dataset is returned as a
+    `TensorDataset` object.
 
-    Transformations are applied to input and output variables according to the
-    `transformations` dictionary.
+    Transformations are applied to the input variables and input parameters
+    according to the `transformations` dictionary. Variables of the
+    transformations that are not inputs (e.g., the output variable the
+    transformations were fitted on in training) are ignored, so `df` does not
+    need to contain them.
 
     The torch dataset has the following attributes, which are returned in the
     order specified below:
@@ -153,9 +158,8 @@ def create_torch_dataset_for_evaluation(
     Returns
     -------
     TensorDataset
-        Torch dataset containing the input variables, input parameters, output
-        targets, event weights, and background event indicators as torch
-        tensors.
+        Torch dataset containing the input variables and input parameters as
+        torch tensors.
     """
 
     # Get column names
@@ -166,10 +170,13 @@ def create_torch_dataset_for_evaluation(
         + f"and input parameters {input_parameter_names}"
     )
 
-    # Transform input and output variables for training dataset creation, leave
-    # the original data frame unchanged
-    df_trans = df.copy()
-    df_trans = apply_transformations(df_trans, transformations)
+    # Transform only the input variables and parameters, as the data frame
+    # does not need to contain the other variables the transformations were
+    # fitted on. Leave the original data frame unchanged.
+    df_trans = apply_transformations_to_unique_input_parameters(
+        df.loc[:, input_variable_names + input_parameter_names].copy(),
+        transformations,
+    )
 
     # Create torch tensors from transformed data frame
     x = torch.from_numpy(
