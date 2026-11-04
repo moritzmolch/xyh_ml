@@ -8,9 +8,10 @@ Machine learning for the X → YH → bbττ analysis (KIT, CMS). The package `x
 
 ## Environment and commands
 
-- Environment is managed by pixi (`pyproject.toml`, `pixi.lock`; linux-64, CUDA 12). Two environments exist because the GPU driver generations differ between machines:
+- Environment is managed by pixi (`pyproject.toml`, `pixi.lock`; linux-64, CUDA 12). Environments exist because the GPU driver generations differ between machines and because some machines have no GPU at all:
   - `default` — CUDA 12.9 / pytorch 2.14.1 (conda-forge, `linux-64-cuda129`), for machines whose NVIDIA driver supports CUDA ≥ 12.9 (e.g. kek, ms). Used as `pixi shell` / `pixi run`.
   - `deepthought` — CUDA 12.0 / pytorch 2.4.1 (conda-forge, `linux-64-cuda`), for this machine `deepthought` (driver 525.147.05 supports at most CUDA 12.0). Use `pixi shell -e deepthought` / `pixi run -e deepthought`.
+  - `cpu` — CPU-only pytorch 2.14.1 (conda-forge `cpu_mkl` build, plain `linux-64`, no CUDA), for machines without an NVIDIA GPU / CUDA driver. Use `pixi shell -e cpu` / `pixi run -e cpu`.
   - conda-forge ships no cuda128 build of pytorch on linux-64, so the next available build for newer machines is cuda129 (`pytorch-gpu >= 2.7.1`).
 - Submodule `modules/tayloranalysis` (git@github.com:kit-cms/tayloranalysis): `git submodule update --init`.
 - Tests: `pytest` (uses `--import-mode=importlib`); single test: `pytest tests/config/test_network.py::test_name`. Tests currently cover only `xyh_ml.config`.
@@ -54,3 +55,4 @@ Paths in `config/base/artifacts.yaml` and `data_source.yaml` point to `/ceph/mmo
 - Seeds are module constants in the CLI scripts (e.g. `TRAIN_TEST_SPLIT_SEED`); keep them fixed for reproducibility.
 - PRs use `.github/PULL_REQUEST_TEMPLATE.md` (Overview, Key Changes, Testing and Verification, Breaking Changes).
 - `data/`, `output/`, `notebooks_dev/` hold generated artifacts and exploratory notebooks, not library code.
+- Summaries and reports of work done (test results, bug lists, review findings) go as Markdown files into `.claude/reports/` in the repo root (e.g. `.claude/reports/friend_production_test_summary.md`), so they can be opened in VS Code; do not leave them only in the terminal or the scratchpad.

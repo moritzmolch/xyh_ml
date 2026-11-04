@@ -176,6 +176,8 @@ def apply_transformations_to_unique_input_parameters(
             )
             t_tmp = StandardScaler()
             t_tmp.mean_, t_tmp.scale_ = mean, scale
+            t_tmp.feature_names_in_ = np.array(v_overlap)
+            t_tmp.n_features_in_ = len(v_overlap)
 
         # Apply transform to the columns
         unique_parameters[v_overlap] = t_tmp.transform(

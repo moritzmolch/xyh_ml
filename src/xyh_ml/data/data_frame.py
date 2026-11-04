@@ -5,6 +5,7 @@ from pathlib import Path
 from time import time
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 from pandas import DataFrame
 from sklearn.model_selection import train_test_split
@@ -272,3 +273,51 @@ def get_unique_input_parameter_combinations(
     )
 
     return unique_parameters
+
+
+def prepare_with_parameter_values(
+    data_frame: pd.DataFrame,
+    parameter_values: pd.DataFrame,
+):
+    """
+    Prepare the data frame for evaluation with multiple parameter values.
+
+    All rows in the original data frame are replicated `len(parameter_values)`
+    times and unique parameter value combinations are added to the data frame.
+
+    Parameters
+    ----------
+    data_frame : pd.DataFrame
+        Data frame to prepare for evaluation with multiple parameter values.
+
+    parameter_values : pd.DataFrame
+        Data frame containing the unique parameter value combinations to add
+        to the data frame.
+    """
+    # Get names of the parameters
+    parameter_columns = parameter_values.columns.tolist()
+
+    # Repeat each event as often as there are parameter value combinations,
+    # keeping the rows of one event together. The data frame has
+    # n_events * n_parameter_values rows after this operation. Positional
+    # indexing does not modify the input data frame and does not depend on
+    # the index being unique.
+    n_events = data_frame.shape[0]
+    n_parameter_values = parameter_values.shape[0]
+    data_frame = data_frame.iloc[
+        np.repeat(np.arange(n_events), n_parameter_values)
+    ]
+
+    # Append a new index level "parameter_value" with the position of the
+    # parameter value combination in parameter_values to be able to track the
+    # order of events
+    data_frame = data_frame.assign(
+        parameter_value=np.tile(np.arange(n_parameter_values), n_events),
+    ).set_index("parameter_value", append=True)
+
+    # Add the parameter value combinations, which repeat for every event
+    data_frame[parameter_columns] = np.tile(
+        parameter_values.to_numpy(), (n_events, 1)
+    )
+
+    return data_frame

@@ -1,0 +1,619 @@
+# -----------------------------------------------------------------------------
+# Default configuration for the friend production
+# -----------------------------------------------------------------------------
+
+defaults:
+- base/artifacts@artifacts
+- base/campaigns@campaigns
+- base/data_source@data_source
+- base/dataset@dataset
+- base/mode@mode
+- base/network@network
+- base/outputs@outputs
+- base/tags@tags
+- base/training@training
+- _ntuple@ntuple
+- inputs: y2b_h2tau
+- _self_
+
+metadata_file: data/output/friends/${ntuple.tag}/metadata/metadata.json.gz
+
+# Input files to produce friend files for; set exactly one of `input_file` and
+# `sample`. One friend file is produced per input file.
+#
+# `input_file`: a single main ntuple file. Must be one of the main files in the
+# metadata file, given either as full path (including the XRootD server) or as
+# a trailing part of it that matches exactly one main file.
+#
+# `sample`: name of a sample in the metadata file; all its main files are
+# processed, for all campaigns and channels unless restricted by `campaign`
+# and `channel`. Both take a single value or a list, e.g.
+# `campaign=2022_pre_ee_nano_v12` or `channel=[et,mt]`; campaigns are the
+# names in `campaigns` (config/base/campaigns.yaml). Not possible together
+# with `input_file`, which determines both.
+#
+# The analysis channel is taken from the sample of each file (`mode.channel`
+# is not used), so that the models trained for this channel are loaded.
+input_file: null
+sample: null
+campaign: null
+channel: null
+
+# Skip input files whose friend file exists already (friend files are only
+# written to their final path when complete)
+skip_existing: false
+
+# Name of the friend. By default, the output file is written to
+# <output_dir>/<era>/<sample>/<channel>/<file name of the input file>,
+# mirroring the CROWN friend directory layout.
+friend_name: pnn-${tags.training_tag}-${mode.decay_mode}
+output_dir: data/output/friends/${ntuple.tag}/CROWNFriend/${friend_name}
+
+# Explicit output file, overrides the default path derived from `output_dir`.
+# Only possible together with `input_file`.
+output_file: null
+
+# Tag of the NN friend on the XRootD server. If set, the friend files are
+# uploaded to the friend directory `<nn_friend_tag>-<decay mode>` next to the
+# other friends of the ntuples (`output_dir` is not used):
+# <ntuple.xrootd_server>//<ntuple.base_dir>/<ntuple.tag>/CROWNFriend/
+#   <nn_friend_tag>-<mode.decay_mode>/<era>/<sample>/<channel>/<file name>
+# The files are written to a temporary directory in `staging_dir` first.
+nn_friend_tag: null
+staging_dir: data/output/friends/staging
+
+# Optional JSON file for the profile of the friend production (time per stage
+# per event and per row, data frame sizes, peak memory). The profile is always
+# logged.
+profile_file: null
+
+# Number of events evaluated at once. Every event is evaluated for every
+# entry in `parameter_values`, so a chunk has
+# chunk_size * len(parameter_values) rows. The peak memory grows by about
+# 175 KiB per event of a chunk (about 1.7 GiB for 10000 events); larger chunks
+# are not faster.
+chunk_size: 10000
+
+parameter_values:
+- m_x: 400
+  m_y: 100
+- m_x: 2000
+  m_y: 600
+- m_x: 1600
+  m_y: 400
+- m_x: 1800
+  m_y: 500
+- m_x: 3500
+  m_y: 1000
+- m_x: 400
+  m_y: 200
+- m_x: 300
+  m_y: 100
+- m_x: 1400
+  m_y: 500
+- m_x: 1600
+  m_y: 200
+- m_x: 3500
+  m_y: 600
+- m_x: 2000
+  m_y: 500
+- m_x: 700
+  m_y: 95
+- m_x: 1800
+  m_y: 60
+- m_x: 3500
+  m_y: 300
+- m_x: 550
+  m_y: 150
+- m_x: 2500
+  m_y: 1800
+- m_x: 550
+  m_y: 90
+- m_x: 900
+  m_y: 95
+- m_x: 400
+  m_y: 150
+- m_x: 1800
+  m_y: 800
+- m_x: 1800
+  m_y: 1000
+- m_x: 1000
+  m_y: 95
+- m_x: 1800
+  m_y: 400
+- m_x: 1400
+  m_y: 300
+- m_x: 700
+  m_y: 500
+- m_x: 1400
+  m_y: 80
+- m_x: 2000
+  m_y: 1200
+- m_x: 3500
+  m_y: 1200
+- m_x: 800
+  m_y: 300
+- m_x: 1000
+  m_y: 200
+- m_x: 1200
+  m_y: 600
+- m_x: 2500
+  m_y: 150
+- m_x: 2500
+  m_y: 70
+- m_x: 1200
+  m_y: 800
+- m_x: 1000
+  m_y: 600
+- m_x: 3500
+  m_y: 200
+- m_x: 500
+  m_y: 60
+- m_x: 1800
+  m_y: 1200
+- m_x: 4000
+  m_y: 95
+- m_x: 1400
+  m_y: 100
+- m_x: 300
+  m_y: 70
+- m_x: 550
+  m_y: 95
+- m_x: 650
+  m_y: 300
+- m_x: 900
+  m_y: 60
+- m_x: 3500
+  m_y: 90
+- m_x: 2500
+  m_y: 400
+- m_x: 1200
+  m_y: 70
+- m_x: 500
+  m_y: 80
+- m_x: 4000
+  m_y: 1600
+- m_x: 1400
+  m_y: 400
+- m_x: 3000
+  m_y: 1400
+- m_x: 600
+  m_y: 70
+- m_x: 1000
+  m_y: 90
+- m_x: 1200
+  m_y: 150
+- m_x: 1000
+  m_y: 500
+- m_x: 1600
+  m_y: 80
+- m_x: 800
+  m_y: 150
+- m_x: 700
+  m_y: 100
+- m_x: 2500
+  m_y: 90
+- m_x: 1000
+  m_y: 150
+- m_x: 550
+  m_y: 400
+- m_x: 3000
+  m_y: 1600
+- m_x: 900
+  m_y: 200
+- m_x: 650
+  m_y: 400
+- m_x: 3000
+  m_y: 1200
+- m_x: 4000
+  m_y: 1000
+- m_x: 2000
+  m_y: 800
+- m_x: 3000
+  m_y: 200
+- m_x: 800
+  m_y: 95
+- m_x: 3500
+  m_y: 100
+- m_x: 500
+  m_y: 150
+- m_x: 1800
+  m_y: 150
+- m_x: 400
+  m_y: 70
+- m_x: 1400
+  m_y: 1000
+- m_x: 1000
+  m_y: 100
+- m_x: 3000
+  m_y: 95
+- m_x: 550
+  m_y: 100
+- m_x: 1200
+  m_y: 80
+- m_x: 1600
+  m_y: 1400
+- m_x: 2000
+  m_y: 150
+- m_x: 1800
+  m_y: 80
+- m_x: 3000
+  m_y: 600
+- m_x: 1400
+  m_y: 200
+- m_x: 500
+  m_y: 90
+- m_x: 2500
+  m_y: 95
+- m_x: 2000
+  m_y: 400
+- m_x: 800
+  m_y: 100
+- m_x: 3000
+  m_y: 300
+- m_x: 3000
+  m_y: 70
+- m_x: 3000
+  m_y: 60
+- m_x: 1200
+  m_y: 500
+- m_x: 4000
+  m_y: 1200
+- m_x: 1800
+  m_y: 70
+- m_x: 1000
+  m_y: 800
+- m_x: 2500
+  m_y: 600
+- m_x: 1600
+  m_y: 500
+- m_x: 2000
+  m_y: 1800
+- m_x: 600
+  m_y: 60
+- m_x: 1200
+  m_y: 300
+- m_x: 1400
+  m_y: 90
+- m_x: 600
+  m_y: 90
+- m_x: 2500
+  m_y: 60
+- m_x: 1600
+  m_y: 90
+- m_x: 3000
+  m_y: 150
+- m_x: 600
+  m_y: 300
+- m_x: 1800
+  m_y: 600
+- m_x: 3500
+  m_y: 60
+- m_x: 4000
+  m_y: 1800
+- m_x: 3500
+  m_y: 150
+- m_x: 4000
+  m_y: 3500
+- m_x: 700
+  m_y: 80
+- m_x: 1400
+  m_y: 800
+- m_x: 1600
+  m_y: 600
+- m_x: 500
+  m_y: 100
+- m_x: 550
+  m_y: 70
+- m_x: 2500
+  m_y: 1200
+- m_x: 1600
+  m_y: 300
+- m_x: 1800
+  m_y: 1600
+- m_x: 650
+  m_y: 60
+- m_x: 1200
+  m_y: 1000
+- m_x: 2000
+  m_y: 70
+- m_x: 3000
+  m_y: 1000
+- m_x: 2000
+  m_y: 200
+- m_x: 3000
+  m_y: 500
+- m_x: 4000
+  m_y: 100
+- m_x: 4000
+  m_y: 200
+- m_x: 1200
+  m_y: 60
+- m_x: 600
+  m_y: 400
+- m_x: 800
+  m_y: 70
+- m_x: 900
+  m_y: 150
+- m_x: 300
+  m_y: 90
+- m_x: 4000
+  m_y: 600
+- m_x: 3000
+  m_y: 800
+- m_x: 1200
+  m_y: 400
+- m_x: 700
+  m_y: 400
+- m_x: 2000
+  m_y: 1600
+- m_x: 900
+  m_y: 80
+- m_x: 550
+  m_y: 80
+- m_x: 2500
+  m_y: 1600
+- m_x: 4000
+  m_y: 800
+- m_x: 3500
+  m_y: 400
+- m_x: 2000
+  m_y: 300
+- m_x: 500
+  m_y: 70
+- m_x: 3000
+  m_y: 2600
+- m_x: 600
+  m_y: 150
+- m_x: 3500
+  m_y: 95
+- m_x: 900
+  m_y: 90
+- m_x: 4000
+  m_y: 70
+- m_x: 700
+  m_y: 70
+- m_x: 2000
+  m_y: 100
+- m_x: 300
+  m_y: 150
+- m_x: 550
+  m_y: 200
+- m_x: 900
+  m_y: 600
+- m_x: 1600
+  m_y: 1000
+- m_x: 1000
+  m_y: 80
+- m_x: 500
+  m_y: 200
+- m_x: 650
+  m_y: 200
+- m_x: 650
+  m_y: 95
+- m_x: 3500
+  m_y: 1600
+- m_x: 4000
+  m_y: 500
+- m_x: 1600
+  m_y: 70
+- m_x: 1600
+  m_y: 100
+- m_x: 500
+  m_y: 95
+- m_x: 500
+  m_y: 300
+- m_x: 1800
+  m_y: 95
+- m_x: 650
+  m_y: 100
+- m_x: 2500
+  m_y: 80
+- m_x: 1400
+  m_y: 600
+- m_x: 700
+  m_y: 300
+- m_x: 900
+  m_y: 500
+- m_x: 4000
+  m_y: 150
+- m_x: 3000
+  m_y: 100
+- m_x: 3000
+  m_y: 400
+- m_x: 3500
+  m_y: 2000
+- m_x: 1000
+  m_y: 70
+- m_x: 1600
+  m_y: 150
+- m_x: 1000
+  m_y: 400
+- m_x: 1800
+  m_y: 90
+- m_x: 1600
+  m_y: 1200
+- m_x: 4000
+  m_y: 2600
+- m_x: 1600
+  m_y: 95
+- m_x: 550
+  m_y: 300
+- m_x: 1400
+  m_y: 95
+- m_x: 2000
+  m_y: 60
+- m_x: 3500
+  m_y: 3000
+- m_x: 1000
+  m_y: 60
+- m_x: 300
+  m_y: 80
+- m_x: 2000
+  m_y: 1000
+- m_x: 2500
+  m_y: 2000
+- m_x: 4000
+  m_y: 400
+- m_x: 800
+  m_y: 60
+- m_x: 800
+  m_y: 500
+- m_x: 2500
+  m_y: 200
+- m_x: 550
+  m_y: 60
+- m_x: 4000
+  m_y: 3000
+- m_x: 1800
+  m_y: 300
+- m_x: 1800
+  m_y: 100
+- m_x: 4000
+  m_y: 1400
+- m_x: 1200
+  m_y: 200
+- m_x: 900
+  m_y: 400
+- m_x: 800
+  m_y: 80
+- m_x: 600
+  m_y: 200
+- m_x: 3500
+  m_y: 1800
+- m_x: 3500
+  m_y: 80
+- m_x: 3000
+  m_y: 1800
+- m_x: 2000
+  m_y: 95
+- m_x: 900
+  m_y: 100
+- m_x: 700
+  m_y: 150
+- m_x: 700
+  m_y: 90
+- m_x: 1800
+  m_y: 200
+- m_x: 1200
+  m_y: 95
+- m_x: 2500
+  m_y: 300
+- m_x: 1400
+  m_y: 150
+- m_x: 3500
+  m_y: 2600
+- m_x: 1000
+  m_y: 300
+- m_x: 1600
+  m_y: 800
+- m_x: 2000
+  m_y: 1400
+- m_x: 4000
+  m_y: 80
+- m_x: 2500
+  m_y: 800
+- m_x: 400
+  m_y: 60
+- m_x: 650
+  m_y: 500
+- m_x: 1400
+  m_y: 70
+- m_x: 600
+  m_y: 100
+- m_x: 700
+  m_y: 200
+- m_x: 2000
+  m_y: 90
+- m_x: 1200
+  m_y: 100
+- m_x: 1400
+  m_y: 1200
+- m_x: 1800
+  m_y: 1400
+- m_x: 4000
+  m_y: 2000
+- m_x: 600
+  m_y: 95
+- m_x: 2000
+  m_y: 80
+- m_x: 800
+  m_y: 90
+- m_x: 400
+  m_y: 80
+- m_x: 3000
+  m_y: 80
+- m_x: 650
+  m_y: 70
+- m_x: 3500
+  m_y: 800
+- m_x: 3000
+  m_y: 2000
+- m_x: 650
+  m_y: 150
+- m_x: 3000
+  m_y: 90
+- m_x: 400
+  m_y: 90
+- m_x: 1600
+  m_y: 60
+- m_x: 3500
+  m_y: 1400
+- m_x: 400
+  m_y: 95
+- m_x: 2500
+  m_y: 500
+- m_x: 900
+  m_y: 70
+- m_x: 4000
+  m_y: 300
+- m_x: 1200
+  m_y: 90
+- m_x: 900
+  m_y: 300
+- m_x: 1400
+  m_y: 60
+- m_x: 2500
+  m_y: 1400
+- m_x: 300
+  m_y: 60
+- m_x: 4000
+  m_y: 60
+- m_x: 650
+  m_y: 90
+- m_x: 650
+  m_y: 80
+- m_x: 800
+  m_y: 400
+- m_x: 4000
+  m_y: 90
+- m_x: 3500
+  m_y: 500
+- m_x: 2500
+  m_y: 100
+- m_x: 700
+  m_y: 60
+- m_x: 2500
+  m_y: 1000
+- m_x: 800
+  m_y: 600
+- m_x: 3500
+  m_y: 70
+- m_x: 600
+  m_y: 80
+- m_x: 300
+  m_y: 95
+- m_x: 800
+  m_y: 200
+
+
+# -----------------------------------------------------------------------------
+# Hydra configuration
+# -----------------------------------------------------------------------------
+
+hydra:
+  run:
+    dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+  verbose: INFO

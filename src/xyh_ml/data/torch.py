@@ -7,7 +7,10 @@ from pandas import DataFrame
 from torch.utils.data import TensorDataset
 
 from xyh_ml.config.dataclasses import Variable
-from xyh_ml.data.transformations import apply_transformations
+from xyh_ml.data.transformations import (
+    apply_transformations,
+    apply_transformations_to_unique_input_parameters,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -109,6 +112,86 @@ def create_torch_dataset(
 
     # Create the tensor dataset from the torch tensors
     dataset = TensorDataset(x, p, y, w, r)
+    logger.debug("Created dataset with torch tensor objects from data frame")
+
+    return dataset
+
+
+def create_torch_dataset_for_evaluation(
+    df: DataFrame,
+    input_variables: list[Variable],
+    input_parameters: list[Variable],
+    transformations: dict[str, dict[str, Any]],
+) -> TensorDataset:
+    """
+    Prepare a dataset for model evaluation by applying transformations and
+    creating torch tensors from the data frame. The dataset is returned as a
+    `TensorDataset` object.
+
+    Transformations are applied to the input variables and input parameters
+    according to the `transformations` dictionary. Variables of the
+    transformations that are not inputs (e.g., the output variable the
+    transformations were fitted on in training) are ignored, so `df` does not
+    need to contain them.
+
+    The torch dataset has the following attributes, which are returned in the
+    order specified below:
+    - `x`: Two-dimensional tensor of input variables
+    - `p`: Two-dimensional tensor of input parameters
+
+    Parameters
+    ----------
+    df : DataFrame
+        Data frame to prepare the dataset from.
+
+    input_variables : list[Variable]
+        List of input variables to use for training/evaluation.
+
+    input_parameters : list[Variable]
+        List of input parameters to use for training/evaluation.
+
+    transformations : dict
+        Dictionary containing the fitted transformation objects and the
+        corresponding variable names. For more information, see the
+        `derive_transformations` function.
+
+    Returns
+    -------
+    TensorDataset
+        Torch dataset containing the input variables and input parameters as
+        torch tensors.
+    """
+
+    # Get column names
+    input_variable_names = [v.name for v in input_variables]
+    input_parameter_names = [v.name for v in input_parameters]
+    logger.debug(
+        f"Preparing torch dataset with input variables {input_variable_names} "
+        + f"and input parameters {input_parameter_names}"
+    )
+
+    # Transform only the input variables and parameters, as the data frame
+    # does not need to contain the other variables the transformations were
+    # fitted on. Leave the original data frame unchanged.
+    df_trans = apply_transformations_to_unique_input_parameters(
+        df.loc[:, input_variable_names + input_parameter_names].copy(),
+        transformations,
+    )
+
+    # Create torch tensors from transformed data frame
+    x = torch.from_numpy(
+        df_trans.loc[:, input_variable_names]
+        .astype(np.float32)
+        .to_numpy(copy=True)
+    ).float()
+    p = torch.from_numpy(
+        df_trans.loc[:, input_parameter_names]
+        .astype(np.float32)
+        .to_numpy(copy=True)
+    ).float()
+
+    # Create the tensor dataset from the torch tensors
+    dataset = TensorDataset(x, p)
     logger.debug("Created dataset with torch tensor objects from data frame")
 
     return dataset

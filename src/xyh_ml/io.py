@@ -1,3 +1,4 @@
+import gzip
 import json
 import logging
 import pickle
@@ -9,6 +10,77 @@ import torch
 from xyh_ml.config.dataclasses import Config
 
 logger = logging.getLogger(__name__)
+
+
+def dump_json(
+    output_file: Path,
+    data: Any,
+):
+    """
+    Serialize a object to a JSON file.
+
+    If the output file ends with `.gz`, the JSON file will be compressed using
+    gzip.
+
+    Parameters
+    ----------
+    output_file : Path
+        Path to the output JSON file.
+
+    data : Any
+        A JSON-serializable object.
+    """
+
+    if output_file.name.endswith(".json.gz"):
+        # If the file ends with 'gz', open the file with gzip library
+        with gzip.open(output_file, "w") as f:
+            f.write(json.dumps(data).encode("utf-8"))
+
+    else:
+        # Use default json.dump behavior otherwise
+        with output_file.open("w") as f:
+            json.dump(data, f)
+
+    logger.debug(f"Dumped JSON data to {output_file}")
+
+
+def load_json(
+    input_file: Path,
+) -> Any:
+    """
+    Deserialize a object from a JSON file.
+
+    If the output file ends with `.gz`, the JSON file will be decompressed
+    using gzip.
+
+    Parameters
+    ----------
+    input_file : Path
+        Path to the input JSON file.
+
+    Returns
+    -------
+
+    data : A
+        A JSON-deserialized object.
+    """
+
+    # Initialize data object
+    data = None
+
+    if input_file.name.endswith(".json.gz"):
+        # If the file ends with 'gz', open the file with gzip library
+        with gzip.open(input_file, "r") as f:
+            data = json.loads(f.read().decode("utf-8"))
+
+    else:
+        # Use default json.load behavior otherwise
+        with input_file.open("r") as f:
+            data = json.load(f)
+
+    logging.info(f"Loaded data from {input_file}")
+
+    return data
 
 
 def dump_config(

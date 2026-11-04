@@ -71,7 +71,7 @@ class Dataset:
 class Network:
     hidden_layers: list[int]
     activation: str
-    dropout: float
+    dropout_frac: float
     activation_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -100,6 +100,56 @@ class Training:
 
 
 @dataclass
+class Campaign:
+    name: str
+    era: str
+
+
+@dataclass
+class Channel:
+    name: str
+
+
+@dataclass
+class Friend:
+    name: str
+    include_channels: list[str] | None = field(default=None)
+    exclude_channels: list[str] | None = field(default=None)
+    include_campaigns: list[str] | None = field(default=None)
+    exclude_campaigns: list[str] | None = field(default=None)
+    include_samples: list[str] | None = field(default=None)
+    exclude_samples: list[str] | None = field(default=None)
+
+    def __post_init__(self):
+        # Ensure that only include_* or exclude_* are set, but not both
+        if self.include_channels and self.exclude_channels:
+            raise ValueError(
+                f"Friend {self.name} cannot have both include and exclude "
+                + "channels."
+            )
+        if self.include_campaigns and self.exclude_campaigns:
+            raise ValueError(
+                f"Friend {self.name} cannot have both include and exclude "
+                + "campaigns."
+            )
+        if self.include_samples and self.exclude_samples:
+            raise ValueError(
+                f"Friend {self.name} cannot have both include and exclude "
+                + "samples."
+            )
+
+
+@dataclass
+class NTupleSource:
+    tag: str
+    xrootd_server: str
+    base_dir: str
+    friends: list[Friend]
+    campaigns: list[str] | None = field(default=None)
+    samples: list[str] | None = field(default=None)
+
+
+@dataclass
 class Config:
     mode: Mode
     tags: Tags
@@ -110,3 +160,6 @@ class Config:
     dataset: Dataset
     network: Network
     training: Training
+    campaigns: list[Campaign]
+    channels: list[Channel]
+    ntuple: NTupleSource

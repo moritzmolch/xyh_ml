@@ -58,6 +58,8 @@ python = "3.13.*"
 ipython = ">=9.17.1,<10"
 uproot = ">=5.7.7,<6"
 jupyterlab = ">=4.6.4,<5"
+xrootd = ">=6.2.1,<7"
+fsspec-xrootd = ">=0.5.5,<0.6"
 
 [tool.pixi.pypi-dependencies]
 xyh_ml = { path = ".", editable = true }
@@ -72,24 +74,39 @@ xyh_ml = { path = ".", editable = true }
 # cuda129 (pytorch-gpu >= 2.7.1), which the default environment uses.
 # -----------------------------------------------------------------------------
 
+[tool.pixi.feature.cpu]
+platforms = ["linux-64"]
+
 [tool.pixi.feature.cuda120]
 platforms = ["linux-64-cuda"]
+
+[tool.pixi.feature.cpu.dependencies]
+pytorch = ">=2.14.1,<3"
+
 [tool.pixi.feature.cuda120.dependencies]
 pytorch-gpu = ">=2.4.1,<2.5"
 cuda-version = ">=12.0,<12.1"
 
 [tool.pixi.feature.cuda129]
 platforms = ["linux-64-cuda129"]
+
 [tool.pixi.feature.cuda129.dependencies]
 pytorch-gpu = ">=2.14.1,<3"
 cuda-version = ">=12.9,<13"
 
 [tool.pixi.environments]
-# default: CUDA 12.9 / pytorch 2.14.1 -- for machines whose driver supports
-# CUDA >= 12.9 (e.g. kek, ms): pixi shell / pixi run
-default = { features = ["cuda129"], platforms = ["linux-64-cuda129"] }
 # deepthought: CUDA 12.0 / pytorch 2.4.1 -- this machine (driver 525.147.05):
 # pixi shell -e deepthought / pixi run -e deepthought
 deepthought = { features = ["cuda120"], platforms = ["linux-64-cuda"] }
+# deepthought2: CUDA 12.9 / pytorch 2.14.1 -- for machines whose driver supports
+# CUDA >= 12.9 (e.g. kek, ms): pixi shell / pixi run
+deepthought2 = { features = ["cuda129"], platforms = ["linux-64-cuda129"] }
+
+[tool.pixi.environments.cpu]
+features = ["cpu"]
+platforms = ["linux-64"]
+
+[tool.pixi.environments.cpu.dependencies]
+pytest = ">=9.2.0,<10"
 
 [tool.pixi.tasks]
