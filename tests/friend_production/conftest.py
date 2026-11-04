@@ -8,15 +8,21 @@ import pytest
 import uproot
 
 
+SERVER_URL = "root://server.example:1094/"
+
+
 class FakeFileSystem:
     """Minimal stand-in for ``XRootD.client.FileSystem``.
 
     ``listings`` maps a directory path to the list of entry names it holds.
-    Unknown paths yield a failing status. All calls are recorded.
+    Unknown paths yield a failing status. All calls are recorded. ``url`` is
+    the server URL, as ``str(FileSystem(...).url)`` returns it (with a
+    trailing slash).
     """
 
-    def __init__(self, listings):
+    def __init__(self, listings, url=SERVER_URL):
         self.listings = listings
+        self.url = url
         self.calls = []
 
     def dirlist(self, path, flags=None):

@@ -62,7 +62,10 @@ def test_get_channel_dirs(fake_fs_factory):
 
 def test_get_files_filters_root_and_sorts(fake_fs_factory):
     fs = fake_fs_factory({"/c": ["b.root", "log.txt", "a.root", "c.root.bak"]})
-    assert get_files(fs, "/c") == ["/c/a.root", "/c/b.root"]
+    assert get_files(fs, "/c") == [
+        "root://server.example:1094//c/a.root",
+        "root://server.example:1094//c/b.root",
+    ]
 
 
 def test_get_files_empty(fake_fs_factory):
@@ -70,18 +73,18 @@ def test_get_files_empty(fake_fs_factory):
 
 
 def test_get_friend_files_absolute_base(fake_fs_factory):
-    d = "/b/CROWNFriend/fr/2018/A/et"
+    d = "/b/tag/CROWNFriend/fr/2018/A/et"
     fs = fake_fs_factory({d: ["2.root", "1.root", "junk"]})
-    assert get_friend_files(fs, "/b", "fr", "2018", "A", "et") == [
-        f"{d}/1.root",
-        f"{d}/2.root",
+    assert get_friend_files(fs, "/b", "tag", "fr", "2018", "A", "et") == [
+        f"root://server.example:1094/{d}/1.root",
+        f"root://server.example:1094/{d}/2.root",
     ]
     assert [c[0] for c in fs.calls] == [d]
 
 
 def test_get_friend_files_relative_base(fake_fs_factory):
-    d = "b/CROWNFriend/fr/2018/A/et"
+    d = "b/tag/CROWNFriend/fr/2018/A/et"
     fs = fake_fs_factory({d: ["1.root"]})
-    assert get_friend_files(fs, "b", "fr", "2018", "A", "et") == [
-        f"{d}/1.root"
+    assert get_friend_files(fs, "b", "tag", "fr", "2018", "A", "et") == [
+        f"root://server.example:1094//{d}/1.root"
     ]

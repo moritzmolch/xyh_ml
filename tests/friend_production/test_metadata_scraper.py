@@ -3,7 +3,7 @@ import logging
 import pytest
 
 from xyh_ml.config.dataclasses import Campaign, Friend
-from xyh_ml.friend_production import metadata_scraper as ms
+from xyh_ml.friend_production import scraper as ms
 from xyh_ml.friend_production.dataclasses import Sample, Shift, Variable
 
 # ---------------------------------------------------------------- get_shifts
@@ -184,8 +184,8 @@ class Recorder:
             ms, "get_files", lambda fs, d: files.get(d, [f"{d}/m.root"])
         )
 
-        def get_friend_files(fs, base, friend, era, sample, channel):
-            self.friend_calls.append((friend, era, sample, channel))
+        def get_friend_files(fs, base, tag, friend, era, sample, channel):
+            self.friend_calls.append((base, tag, friend, era, sample, channel))
             return [f"{friend}/{era}/{sample}/{channel}.root"]
 
         monkeypatch.setattr(ms, "get_friend_files", get_friend_files)
@@ -228,6 +228,7 @@ def test_scrape_metadata_builds_sample_object(recorder):
     assert sample.channel == "et"
     assert sample.main_files == ["/base/tag/CROWNRun/2018/A/et/m.root"]
     assert sample.friend_files == {"fr": ["fr/2018/A/et.root"]}
+    assert rec.friend_calls == [("/base", "tag", "fr", "2018", "A", "et")]
     assert sample.shifts == []
     assert rec.shift_calls == [(sample.main_files, sample.friend_files)]
 
@@ -262,15 +263,17 @@ def test_scrape_metadata_with_real_dict_returning_helpers(
     monkeypatch.setattr(ms, "get_shifts", lambda m, f: [])
     result = ms.scrape_metadata(fs, "/base", "tag", [], CAMPAIGNS)
     assert [s.sample for s in result] == ["A"]
-    assert result[0].main_files == ["/base/tag/CROWNRun/2018/A/et/x.root"]
+    assert result[0].main_files == [
+        "root://server.example:1094//base/tag/CROWNRun/2018/A/et/x.root"
+    ]
 
 
-def test_scrape_metadata_era_not_in_campaigns_raises(recorder, caplog):
+def test_scrape_metadata_era_not_in_campaigns_is_skipped(recorder, caplog):
     recorder(eras=["2018", "2022"])
-    with caplog.at_level(logging.ERROR, logger=ms.logger.name):
-        with pytest.raises(ValueError, match="Era '2022'"):
-            run(campaigns=[CAMPAIGNS[0]])
-    assert "Era '2022'" in caplog.text
+    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
+        result = run(campaigns=[CAMPAIGNS[0]])
+    assert [s.era for s in result] == ["2018"]
+    assert "Folder '2022' ignored" in caplog.text
 
 
 def test_scrape_metadata_sample_filter(recorder):
