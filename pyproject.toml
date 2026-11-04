@@ -64,6 +64,12 @@ fsspec-xrootd = ">=0.5.5,<0.6"
 [tool.pixi.pypi-dependencies]
 xyh_ml = { path = ".", editable = true }
 
+# Ignore packages in the user site directory (~/.local/lib/python3.X), which
+# otherwise shadow the packages of the pixi environments (e.g. an older
+# matplotlib that breaks the CMS labels of mplhep).
+[tool.pixi.activation.env]
+PYTHONNOUSERSITE = "1"
+
 # -----------------------------------------------------------------------------
 # CUDA-specific features.
 #
