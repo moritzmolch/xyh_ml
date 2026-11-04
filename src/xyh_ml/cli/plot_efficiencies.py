@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 
 import hydra
 import matplotlib.pyplot as plt
@@ -9,30 +8,16 @@ import seaborn as sns
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.config import Config, OutputClass
+from xyh_ml.plotting import (
+    CAMPAIGN_LABELS,
+    CHANNEL_LABELS,
+    DECAY_MODE_LABELS,
+    add_class_indices,
+    get_fold_label,
+    load_predictions,
+)
 
 sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
-
-DECAY_MODE_LABELS = {
-    "y2b_h2tau": r"$\text{X} \to \text{Y}(\text{b}\text{b})\text{H}(\tau\tau)$",
-    "y2tau_h2b": r"$\text{X} \to \text{Y}(\tau\tau)\text{H}(\text{b}\text{b})$",
-}
-
-
-CAMPAIGN_LABELS = {
-    "2022_pre_ee_nano_v12": "2022preEE",
-    "2022_post_ee_nano_v12": "2022postEE",
-    "2023_pre_bpix_nano_v12": "2023preBPix",
-    "2023_post_bpix_nano_v12": "2023postBPix",
-    "2024_nano_v15": "2024",
-    "2025_nano_v15": "2025",
-}
-
-
-CHANNEL_LABELS = {
-    "et": r"$\text{e}\tau_{\text{h}}$",
-    "mt": r"$\mu\tau_{\text{h}}$",
-    "tt": r"$\tau_{\text{h}}\tau_{\text{h}}$",
-}
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -40,8 +25,7 @@ logger = logging.getLogger(__name__)
 
 def _plot_efficiencies(
     efficiencies: pd.DataFrame,
-    fold: int,
-    n_folds: int,
+    fold_title: str,
     decay_mode: str,
     campaign: str,
     channel: str,
@@ -141,9 +125,16 @@ def _plot_efficiencies(
     plt.subplots_adjust(top=0.88, right=0.85)
 
     # Add title with information about decay mode, campaign, channel, and
-    # held-out fold
+    # evaluated fold(s)
     fig.suptitle(
-        f"{DECAY_MODE_LABELS[decay_mode]}\t{CAMPAIGN_LABELS[campaign]}\t{CHANNEL_LABELS[channel]}\t(held-out fold {fold} of {n_folds})"
+        "\t".join(
+            [
+                DECAY_MODE_LABELS[decay_mode],
+                CAMPAIGN_LABELS[campaign],
+                CHANNEL_LABELS[channel],
+                f"({fold_title})",
+            ]
+        ),
     )
 
     return fig, ax
@@ -155,30 +146,13 @@ def _plot_efficiencies(
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Load the predictions data frame written by the categorization step for
-    # the selected decay mode, fold and channel
-    input_file = (
-        Path(cfg.artifacts.predictions_dir)
-        / f"predictions_{cfg.mode.decay_mode}.h5"
-    )
-    data_frame = pd.read_hdf(input_file)
-
-    # Get the output variable name
-    output_variable_name = cfg.outputs.variables[0].name
-
-    # Get categorized class and assign predicted class to each event
-    score_columns = [
-        f"score_{output_class.name}" for output_class in cfg.outputs.classes
-    ]
-    data_frame["true_class_index"] = data_frame[output_variable_name].map(
-        {
-            output_class.name: i
-            for i, output_class in enumerate(cfg.outputs.classes)
-        }
-    )
-    data_frame["predicted_class_index"] = np.argmax(
-        data_frame[score_columns], axis=1
-    )
+    # Load the predictions written by the categorization step for the
+    # selected decay mode and channel, either of the held-out fold or merged
+    # for all folds, and assign the true and predicted class to each event
+    merge_folds = cfg.plotting.merge_folds
+    data_frame = load_predictions(cfg, merge_folds=merge_folds)
+    data_frame = add_class_indices(data_frame, cfg)
+    fold_title, fold_suffix = get_fold_label(cfg, merge_folds=merge_folds)
 
     # Store efficiency of categorizing events into the correct class for each
     # unique parameter combination
@@ -216,8 +190,7 @@ def main(cfg: Config):
     ):
         fig, ax = _plot_efficiencies(
             df,
-            cfg.mode.fold,
-            cfg.mode.n_folds,
+            fold_title,
             cfg.mode.decay_mode,
             campaign,
             channel,
@@ -230,12 +203,16 @@ def main(cfg: Config):
                 / "output"
                 / cfg.tags.training_tag
                 / "plots"
-                / f"efficiency__{cfg.mode.decay_mode}__{campaign}__{channel}__fold{cfg.mode.fold}of{cfg.mode.n_folds}.{ext}"
+                / (
+                    f"efficiency__{cfg.mode.decay_mode}__{campaign}"
+                    f"__{channel}__{fold_suffix}.{ext}"
+                )
             )
             if not output_file.parent.exists():
                 output_file.parent.mkdir(parents=True)
             fig.savefig(output_file)
             logger.info(f"Saved efficiency plot to {output_file}")
+        plt.close(fig)
 
 
 if __name__ == "__main__":
