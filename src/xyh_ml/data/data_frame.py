@@ -275,7 +275,7 @@ def get_unique_input_parameter_combinations(
     return unique_parameters
 
 
-def prepare_parameter_values(
+def prepare_parameter_with_values(
     data_frame: pd.DataFrame,
     parameter_values: pd.DataFrame,
 ):
