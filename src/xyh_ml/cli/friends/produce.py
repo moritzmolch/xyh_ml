@@ -202,10 +202,11 @@ def load_data_frame(
 
         # Join main and friend columns and restore the requested order
         df = pd.concat(frames, axis=1)[list(dict.fromkeys(columns))]
-
-        # Add chunk index and entry information to the data frame
-        df["chunk"] = chunk.index
-        df["entry"] = range(slice.entry_start, slice.entry_stop)
+        df.index = pd.MultiIndex.from_arrays(
+            np.ones(shape=(df.shape[0],), dtype=int) * chunk.index,
+            np.arange(slice.entry_start, slice.entry_stop),
+            names=["chunk", "entry"],
+        )
 
         data_frames.append(df)
 
@@ -214,7 +215,7 @@ def load_data_frame(
             columns=[*dict.fromkeys(columns), "chunk", "entry"]
         )
 
-    return pd.concat(data_frames, ignore_index=True)
+    return pd.concat(data_frames)
 
 
 @hydra.main(
