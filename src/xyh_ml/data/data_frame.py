@@ -295,46 +295,29 @@ def prepare_with_parameter_values(
         to the data frame.
     """
     # Get names of the parameters
-    parameter_columns = parameter_values.columns
+    parameter_columns = parameter_values.columns.tolist()
 
-    # Create a set with all unique parameter value combinations for each event.
-    # The output of this operation is an array with shape (n_events *
-    # n_unique_parameters, n_parameters).
+    # Repeat each event as often as there are parameter value combinations,
+    # keeping the rows of one event together. The data frame has
+    # n_events * n_parameter_values rows after this operation. Positional
+    # indexing does not modify the input data frame and does not depend on
+    # the index being unique.
     n_events = data_frame.shape[0]
     n_parameter_values = parameter_values.shape[0]
-    n_parameters = parameter_values.shape[1]
-    parameter_values_reshaped = np.reshape(
-        parameter_values.to_numpy(),
-        (1, n_parameter_values, n_parameters),
-    )
-    parameter_values_repeated = np.reshape(
-        np.repeat(parameter_values_reshaped, n_events, axis=0),
-        (n_events * n_parameter_values, n_parameters),
-    )
-    parameter_values_index = np.reshape(
-        np.repeat(
-            np.reshape(
-                np.arange(n_parameter_values),
-                (1, n_parameter_values),
-                axis=0,
-            ),
-            n_events,
-        ),
-        (n_events * n_parameter_values,),
-    )
+    data_frame = data_frame.iloc[
+        np.repeat(np.arange(n_events), n_parameter_values)
+    ]
 
-    # Repeat events as often as there are unique parameter combinations. The
-    # data frame will have n_events * n_unique_parameters rows after this
-    # operation. Append a new index level "parameter_value" to be able to
-    # track the order of events.
-    data_frame = data_frame.loc[data_frame.index.repeat(n_parameter_values)]
+    # Append a new index level "parameter_value" with the position of the
+    # parameter value combination in parameter_values to be able to track the
+    # order of events
     data_frame = data_frame.assign(
-        "parameter_value",
-        parameter_values_index,
+        parameter_value=np.tile(np.arange(n_parameter_values), n_events),
     ).set_index("parameter_value", append=True)
 
-    # Add the unique parameter value combinations to the background events data
-    # frame
-    data_frame[parameter_columns] = parameter_values_repeated
+    # Add the parameter value combinations, which repeat for every event
+    data_frame[parameter_columns] = np.tile(
+        parameter_values.to_numpy(), (n_events, 1)
+    )
 
     return data_frame
