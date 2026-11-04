@@ -71,7 +71,7 @@ class Dataset:
 class Network:
     hidden_layers: list[int]
     activation: str
-    dropout: float
+    dropout_frac: float
     activation_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
