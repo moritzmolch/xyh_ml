@@ -332,11 +332,14 @@ def _process_fold(
         fold_transformations,
     )
 
-    # Evaluate the model
+    # Evaluate the model. The dataset is already in memory, so no data loader
+    # worker processes are used; forking them from the multi-threaded process
+    # for every fold and chunk is slow and can deadlock.
     predictions = predict(
         fold_model,
         fold_dataset,
         device="cuda" if torch.cuda.is_available() else "cpu",
+        data_loader_num_workers=0,
         batch_size=batch_size,
     )
 
