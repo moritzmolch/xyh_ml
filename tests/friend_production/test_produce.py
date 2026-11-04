@@ -1,10 +1,15 @@
 """Tests for the functions of the friend production CLI script."""
 
 import numpy as np
+import pandas as pd
 import pytest
+import torch
 import uproot
 
 from xyh_ml.cli.friends import produce
+from xyh_ml.config.dataclasses import Campaign, OutputClass, Variable
+from xyh_ml.data.data_frame import prepare_with_parameter_values
+from xyh_ml.data.transformations import derive_transformations
 from xyh_ml.friend_production.dataclasses import (
     Chunk,
     FileSlice,
@@ -271,3 +276,268 @@ def test_load_data_frame_empty_chunk():
     assert df.empty
     assert df.columns.tolist() == ["pt", "score"]
     assert df.index.names == ["chunk", "slice", "entry"]
+
+
+# ------------------------------------------------- model evaluation helpers
+
+INPUT_VARIABLES = [
+    Variable("pt", "standard_scaling"),
+    Variable("campaign", "ordinal_encoding", is_part_of_snapshot=False),
+]
+INPUT_PARAMETERS = [
+    Variable("m_x", "standard_scaling", is_part_of_snapshot=False),
+]
+OUTPUT_VARIABLE = Variable("class", "ordinal_encoding")
+
+# Order in the configuration differs from the alphabetical order of the
+# ordinal encoder categories (bkg, sig, tt)
+OUTPUT_CLASSES = [
+    OutputClass("sig", "Signal", [], True),
+    OutputClass("tt", "ttbar", [], False),
+    OutputClass("bkg", "Other", [], False),
+]
+SCORE_COLUMNS = ["score_sig", "score_tt", "score_bkg"]
+N_FOLDS = 2
+
+# Class that the model of each fold prefers (by name)
+FOLD_PREFERRED_CLASS = {0: "tt", 1: "bkg"}
+
+
+class ConstantModel(torch.nn.Module):
+    """Model returning the same logits for every event."""
+
+    def __init__(self, logits):
+        super().__init__()
+        self.register_buffer("logits", torch.tensor(logits))
+
+    def forward(self, x):
+        return self.logits.expand(x.shape[0], -1)
+
+
+def _encoder_logits(preferred):
+    """Logits in ordinal encoder order (bkg, sig, tt) favouring a class."""
+    return [3.0 if c == preferred else 0.0 for c in ["bkg", "sig", "tt"]]
+
+
+def _expected_scores(preferred):
+    """Softmax scores in configuration order for a preferred class."""
+    e = np.exp([3.0 if c.name == preferred else 0.0 for c in OUTPUT_CLASSES])
+    return e / e.sum()
+
+
+@pytest.fixture
+def models():
+    return {
+        fold: ConstantModel(_encoder_logits(preferred))
+        for fold, preferred in FOLD_PREFERRED_CLASS.items()
+    }
+
+
+@pytest.fixture
+def transformations():
+    train = pd.DataFrame(
+        {
+            "pt": [10.0, 20.0, 30.0, 40.0],
+            "campaign": ["2024_nano_v15", "2025_nano_v15"] * 2,
+            "m_x": [400.0, 400.0, 1000.0, 1000.0],
+            "class": ["sig", "tt", "bkg", "sig"],
+        }
+    )
+    t = derive_transformations(
+        train, INPUT_VARIABLES + INPUT_PARAMETERS + [OUTPUT_VARIABLE]
+    )
+    return {fold: t for fold in range(N_FOLDS)}
+
+
+@pytest.fixture
+def parameter_values():
+    return pd.DataFrame({"m_x": [400, 1000, 2000]})
+
+
+@pytest.fixture
+def expanded(parameter_values):
+    """Five events, expanded with three parameter values."""
+    events = pd.DataFrame(
+        {
+            "event": [10, 11, 12, 13, 14],
+            "pt": [12.0, 18.0, 25.0, 33.0, 39.0],
+            "campaign": ["2024_nano_v15"] * 5,
+        },
+        index=pd.MultiIndex.from_tuples(
+            [(0, 0, 3), (0, 0, 4), (0, 1, 0), (0, 1, 1), (0, 1, 2)],
+            names=produce.INDEX_NAMES,
+        ),
+    )
+    return prepare_with_parameter_values(events, parameter_values)
+
+
+def _process_fold(data_frame, fold, models, transformations):
+    return produce._process_fold(
+        data_frame,
+        fold,
+        N_FOLDS,
+        INPUT_VARIABLES,
+        INPUT_PARAMETERS,
+        OUTPUT_VARIABLE,
+        OUTPUT_CLASSES,
+        models,
+        transformations,
+        batch_size=4,
+    )
+
+
+# ------------------------------------------------------------- _process_fold
+
+
+@pytest.mark.parametrize("fold", [0, 1])
+def test_process_fold_selects_held_out_events(
+    expanded, models, transformations, fold
+):
+    df = _process_fold(expanded, fold, models, transformations)
+
+    assert len(df) == 3 * (3 if fold == 0 else 2)
+    assert (df["event"] % N_FOLDS == fold).all()
+
+
+@pytest.mark.parametrize("fold", [0, 1])
+def test_process_fold_scores_in_config_order(
+    expanded, models, transformations, fold
+):
+    df = _process_fold(expanded, fold, models, transformations)
+    preferred = FOLD_PREFERRED_CLASS[fold]
+
+    np.testing.assert_allclose(
+        df[SCORE_COLUMNS].to_numpy(),
+        np.tile(_expected_scores(preferred), (len(df), 1)),
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(df[SCORE_COLUMNS].sum(axis=1), 1.0, rtol=1e-6)
+    names = [c.name for c in OUTPUT_CLASSES]
+    assert (df["max_score_index"] == names.index(preferred)).all()
+    assert (df["max_score_name"] == preferred).all()
+
+
+def test_process_fold_keeps_input(expanded, models, transformations):
+    before = expanded.copy()
+
+    _process_fold(expanded, 0, models, transformations)
+
+    pd.testing.assert_frame_equal(expanded, before)
+
+
+def test_process_fold_without_events(expanded, models, transformations):
+    even = expanded[expanded["event"] % 2 == 0]
+
+    df = _process_fold(even, 1, models, transformations)
+
+    assert df.empty
+    assert set(SCORE_COLUMNS + ["max_score_index"]).issubset(df.columns)
+
+
+# ----------------------------------------------------------- _flatten_scores
+
+
+def _evaluated(expanded, models, transformations):
+    return pd.concat(
+        [
+            _process_fold(expanded, fold, models, transformations)
+            for fold in range(N_FOLDS)
+        ]
+    )
+
+
+def test_flatten_scores_one_row_per_event(
+    expanded, models, transformations, parameter_values
+):
+    evaluated = _evaluated(expanded, models, transformations)
+
+    flat = produce._flatten_scores(evaluated, parameter_values, OUTPUT_CLASSES)
+
+    assert flat.index.names == produce.INDEX_NAMES
+    assert flat.index.tolist() == [
+        (0, 0, 3),
+        (0, 0, 4),
+        (0, 1, 0),
+        (0, 1, 1),
+        (0, 1, 2),
+    ]
+    assert flat.columns.tolist() == [
+        f"{c}_m_x_{m}"
+        for m in [400, 1000, 2000]
+        for c in SCORE_COLUMNS + ["max_score_index"]
+    ]
+
+
+def test_flatten_scores_values(
+    expanded, models, transformations, parameter_values
+):
+    # Row order of the input must not matter
+    evaluated = _evaluated(expanded, models, transformations).sample(
+        frac=1.0, random_state=1
+    )
+
+    flat = produce._flatten_scores(evaluated, parameter_values, OUTPUT_CLASSES)
+
+    for (_, _, entry), row in flat.iterrows():
+        event = {3: 10, 4: 11, 0: 12, 1: 13, 2: 14}[entry]
+        expected = _expected_scores(FOLD_PREFERRED_CLASS[event % N_FOLDS])
+        for m in [400, 1000, 2000]:
+            np.testing.assert_allclose(
+                [row[f"{c}_m_x_{m}"] for c in SCORE_COLUMNS],
+                expected,
+                rtol=1e-6,
+            )
+
+
+# ------------------------------------------------------------ _process_chunk
+
+
+def test_process_chunk(write_tree, models, transformations, parameter_values):
+    main = [
+        write_tree(
+            "a.root",
+            {"event": [10, 11, 12], "pt": [12.0, 18.0, 25.0]},
+        ),
+        write_tree("b.root", {"event": [13, 14], "pt": [33.0, 39.0]}),
+    ]
+    sample = _sample(main)
+    sample.era = "2024"
+    (chunk,) = produce.determine_chunks(sample, chunk_size=100)
+
+    df = produce._process_chunk(
+        chunk,
+        ["event", "pt"],
+        sample,
+        INPUT_VARIABLES,
+        INPUT_PARAMETERS,
+        OUTPUT_VARIABLE,
+        OUTPUT_CLASSES,
+        [Campaign("2024_nano_v15", "2024"), Campaign("2025_nano_v15", "2025")],
+        parameter_values,
+        models,
+        transformations,
+        N_FOLDS,
+        batch_size=4,
+    )
+
+    # One row per event with the loaded columns, the campaign and the
+    # flattened scores
+    assert df.index.tolist() == [
+        (0, 0, 0),
+        (0, 0, 1),
+        (0, 0, 2),
+        (0, 1, 0),
+        (0, 1, 1),
+    ]
+    assert df.columns[:3].tolist() == ["event", "pt", "campaign"]
+    assert (df["campaign"] == "2024_nano_v15").all()
+    assert len(df.columns) == 3 + 3 * 4
+    for _, row in df.iterrows():
+        expected = _expected_scores(
+            FOLD_PREFERRED_CLASS[int(row["event"]) % N_FOLDS]
+        )
+        np.testing.assert_allclose(
+            [row[f"{c}_m_x_2000"] for c in SCORE_COLUMNS],
+            expected,
+            rtol=1e-6,
+        )

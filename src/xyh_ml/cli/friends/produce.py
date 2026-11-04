@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 import hydra
 import numpy as np
@@ -8,7 +9,12 @@ import torch
 import uproot
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.config.dataclasses import Campaign, Config, Variable
+from xyh_ml.config.dataclasses import (
+    Campaign,
+    Config,
+    OutputClass,
+    Variable,
+)
 from xyh_ml.data.data_frame import prepare_with_parameter_values
 from xyh_ml.data.torch import create_torch_dataset_for_evaluation
 from xyh_ml.friend_production.dataclasses import Chunk, FileSlice, Sample
@@ -241,6 +247,10 @@ def load_data_frame(
     return pd.concat(data_frames)
 
 
+def _score_columns(output_classes: list[OutputClass]) -> list[str]:
+    return [f"score_{output_class.name}" for output_class in output_classes]
+
+
 def _process_fold(
     data_frame: pd.DataFrame,
     fold: int,
@@ -248,16 +258,34 @@ def _process_fold(
     input_variables: list[Variable],
     input_parameters: list[Variable],
     output_variable: Variable,
-    output_classes: list[Variable],
+    output_classes: list[OutputClass],
     models: dict[int, torch.nn.Module],
-    transformations: dict[int, dict[str, dict[str, any]]],
+    transformations: dict[int, dict[str, dict[str, Any]]],
     batch_size: int,
-):
+) -> pd.DataFrame:
+    """Evaluate the model of ``fold`` on the events of ``data_frame`` that
+    were held out in its training (``event % n_folds == fold``).
+
+    Returns a copy of these events with the columns ``score_<class>`` (in
+    the order of ``output_classes``), ``max_score_index`` and
+    ``max_score_name``.
+    """
+    score_columns = _score_columns(output_classes)
+    class_names = np.array([c.name for c in output_classes])
+
     # Only keep events that have not been used for training in this
-    # fold
+    # fold. Copy to be able to add columns without modifying the input.
     fold_data_frame = data_frame[
         data_frame[EVENT_COLUMN_NAME] % n_folds == fold
-    ]
+    ].copy()
+
+    # Nothing to evaluate if no event of the chunk belongs to this fold
+    if fold_data_frame.empty:
+        return fold_data_frame.assign(
+            **{c: pd.Series(dtype=np.float32) for c in score_columns},
+            max_score_index=pd.Series(dtype=np.int64),
+            max_score_name=pd.Series(dtype=object),
+        )
 
     # Get the fold transformations and the fold model
     fold_transformations = transformations[fold]
@@ -273,71 +301,71 @@ def _process_fold(
 
     # Evaluate the model
     predictions = predict(
-        fold_dataset,
         fold_model,
+        fold_dataset,
         device="cuda" if torch.cuda.is_available() else "cpu",
         batch_size=batch_size,
     )
 
     # Reorder predictions such that they match the order of output
-    # classes in the configuration file
-    # Store the predictions in a data frame with the same index as the
-    # fold data frame
-    t = transformations["ordinal_encoding"]["transformation"]
+    # classes in the configuration file. The model outputs are ordered like
+    # the categories of the ordinal encoder of the output variable.
+    t = fold_transformations["ordinal_encoding"]["transformation"]
     i_category = t.feature_names_in_.tolist().index(output_variable.name)
     transformation_categories = t.categories_[i_category].tolist()
     correct_order = [
         transformation_categories.index(output_class.name)
-        for output_class in enumerate(output_classes)
+        for output_class in output_classes
     ]
     predictions = predictions[:, correct_order]
 
     # Store the predictions and the class with maximum score in the
     # fold data frame
-    fold_data_frame[
-        [f"score_{output_class.name}" for output_class in output_classes]
-    ] = predictions
-    fold_data_frame["max_score_index"] = np.argmax(predictions, axis=1)
-    fold_data_frame["max_score_name"] = fold_data_frame[
-        "max_score_index"
-    ].apply(lambda i: output_classes[i].name)
+    fold_data_frame[score_columns] = predictions
+    max_score_index = np.argmax(predictions, axis=1)
+    fold_data_frame["max_score_index"] = max_score_index
+    fold_data_frame["max_score_name"] = class_names[max_score_index]
 
     return fold_data_frame
 
 
 def _flatten_scores(
     data_frame: pd.DataFrame,
-    n_events: int,
     parameter_values: pd.DataFrame,
-    output_classes: list[Variable],
-):
-    # Flatten score structure again
-    score_columns = [
-        f"score_{output_class.name}" for output_class in output_classes
-    ] + ["max_score_index", "max_score_name"]
-    data_frame = data_frame[score_columns]
-    scores_flattened = (
-        data_frame[score_columns]
-        .to_numpy()
-        .reshape(
-            n_events,
-            parameter_values.shape[0] * len(score_columns),
+    output_classes: list[OutputClass],
+) -> pd.DataFrame:
+    """Turn the per-parameter-value rows of ``data_frame`` (index level
+    ``parameter_value``) into one row per event.
+
+    The returned data frame has the remaining index levels of ``data_frame``
+    (sorted) and the columns ``<score>_<parameter values>``, e.g.
+    ``score_sig_m_x_400_m_y_100``, for the scores and ``max_score_index``.
+    ``max_score_name`` is not included, as it is not numeric.
+    """
+    score_columns = _score_columns(output_classes) + ["max_score_index"]
+
+    # One row per event, columns (score column, parameter value index)
+    flat = data_frame[score_columns].unstack("parameter_value")
+
+    # Order columns by parameter value first, then by score column
+    flat = flat.reorder_levels([1, 0], axis=1)
+    flat = flat.reindex(
+        columns=pd.MultiIndex.from_product(
+            [range(parameter_values.shape[0]), score_columns]
         )
     )
 
     # Construct column names for the flattened scores
-    column_names_flattened = []
-    for _, parameter_value in parameter_values.iterrows():
-        for score_column in score_columns:
-            parameter_value_str = "_".join(
-                f"{col}_{int(val)}"
-                for col, val in parameter_value.to_dict().items()
-            )
-            column_names_flattened.append(
-                f"{score_column}_{parameter_value_str}"
-            )
+    parameter_value_strs = [
+        "_".join(f"{col}_{int(val)}" for col, val in row.items())
+        for row in parameter_values.to_dict(orient="records")
+    ]
+    flat.columns = [
+        f"{score_column}_{parameter_value_strs[i]}"
+        for i, score_column in flat.columns
+    ]
 
-    return scores_flattened, column_names_flattened
+    return flat
 
 
 def _process_chunk(
@@ -347,14 +375,17 @@ def _process_chunk(
     input_variables: list[Variable],
     input_parameters: list[Variable],
     output_variable: Variable,
-    output_classes: list[Variable],
+    output_classes: list[OutputClass],
     campaigns: list[Campaign],
     parameter_values: pd.DataFrame,
     models: dict[int, torch.nn.Module],
-    transformations: dict[int, dict[str, dict[str, any]]],
+    transformations: dict[int, dict[str, dict[str, Any]]],
     n_folds: int,
     batch_size: int,
-):
+) -> pd.DataFrame:
+    """Load a chunk, evaluate the fold models for all parameter values and
+    return one row per event with the loaded columns, ``campaign`` and the
+    flattened scores (see :func:`_flatten_scores`)."""
     # Create eras lookup table
     eras_lookup = {c.era: c for c in campaigns}
 
@@ -370,7 +401,6 @@ def _process_chunk(
     )
 
     # Split data frame into folds and evaluate the model for each fold
-    orig_index = data_frame.index
     fold_data_frames = [
         _process_fold(
             data_frame,
@@ -387,19 +417,16 @@ def _process_chunk(
         for i in range(n_folds)
     ]
 
-    # Merge fold data frames
+    # Merge fold data frames and flatten the scores to one row per event
     data_frame_eval = pd.concat(fold_data_frames)
-    data_frame_eval = data_frame_eval.loc[orig_index]
+    scores = _flatten_scores(data_frame_eval, parameter_values, output_classes)
 
-    scores_flattened, column_names_flattened = _flatten_scores(
-        data_frame_eval,
-        chunk_data_frame.shape[0],
-        parameter_values,
-        output_classes,
+    # Add the scores in one step instead of column by column, which would
+    # fragment the data frame
+    return pd.concat(
+        [chunk_data_frame, scores.reindex(chunk_data_frame.index)],
+        axis=1,
     )
-    chunk_data_frame[column_names_flattened] = scores_flattened
-
-    return chunk_data_frame
 
 
 @hydra.main(
