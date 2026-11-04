@@ -1,8 +1,10 @@
 import logging
 
 import pytest
+from hydra import compose, initialize_config_dir
 
-from xyh_ml.config.dataclasses import Campaign, Friend
+from xyh_ml import PROJECT_DIR
+from xyh_ml.config.dataclasses import Campaign, Channel, Friend
 from xyh_ml.friend_production import scraper as ms
 from xyh_ml.friend_production.dataclasses import Sample, Shift, Variable
 
@@ -211,9 +213,12 @@ CAMPAIGNS = [
 ]
 
 
-def run(friends=(), campaigns=CAMPAIGNS, samples=None):
+CHANNELS = [Channel(name="et"), Channel(name="mt"), Channel(name="tt")]
+
+
+def run(friends=(), campaigns=CAMPAIGNS, channels=CHANNELS, samples=None):
     return ms.scrape_metadata(
-        None, "/base", "tag", list(friends), campaigns, samples
+        None, "/base", "tag", list(friends), campaigns, channels, samples
     )
 
 
@@ -261,7 +266,7 @@ def test_scrape_metadata_with_real_dict_returning_helpers(
         }
     )
     monkeypatch.setattr(ms, "get_shifts", lambda m, f: [])
-    result = ms.scrape_metadata(fs, "/base", "tag", [], CAMPAIGNS)
+    result = ms.scrape_metadata(fs, "/base", "tag", [], CAMPAIGNS, CHANNELS)
     assert [s.sample for s in result] == ["A"]
     assert result[0].main_files == [
         "root://server.example:1094//base/tag/CROWNRun/2018/A/et/x.root"
@@ -274,6 +279,25 @@ def test_scrape_metadata_era_not_in_campaigns_is_skipped(recorder, caplog):
         result = run(campaigns=[CAMPAIGNS[0]])
     assert [s.era for s in result] == ["2018"]
     assert "Folder '2022' ignored" in caplog.text
+
+
+def test_scrape_metadata_channel_not_in_channels_is_skipped(recorder, caplog):
+    rec = recorder(samples=["A"], channels=["em", "et", "mt"])
+    with caplog.at_level(logging.INFO, logger=ms.logger.name):
+        result = run(
+            friends=[Friend(name="fr")],
+            channels=[Channel(name="et"), Channel(name="mt")],
+        )
+    assert [s.channel for s in result] == ["et", "mt"]
+    assert "Skipping channel em of sample A (2018)" in caplog.text
+    # Neither files nor shifts are looked up for the skipped channel
+    assert [c[-1] for c in rec.friend_calls] == ["et", "mt"]
+    assert len(rec.shift_calls) == 2
+
+
+def test_scrape_metadata_without_channels_is_empty(recorder):
+    recorder(channels=["et", "mt"])
+    assert run(channels=[]) == []
 
 
 def test_scrape_metadata_sample_filter(recorder):
@@ -352,3 +376,12 @@ def test_scrape_metadata_friend_include_samples_regex(
     recorder(samples=[sample])
     (result,) = run(friends=[Friend(name="fr", include_samples=["^TT"])])
     assert ("fr" in result.friend_files) is expected
+
+
+def test_scrape_metadata_config_has_channels():
+    with initialize_config_dir(
+        str(PROJECT_DIR / "config"), version_base="1.3"
+    ):
+        cfg = compose("scrape_metadata")
+
+    assert [c.name for c in cfg.channels] == ["et", "mt", "tt"]

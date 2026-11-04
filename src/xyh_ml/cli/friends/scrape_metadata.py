@@ -29,6 +29,7 @@ def main(cfg: Config):
 
     # Get information about what to process
     campaigns = cfg.campaigns
+    channels = cfg.channels
 
     # Create the XRootD file system
     xrd_fs = FileSystem(xrootd_server)
@@ -40,6 +41,7 @@ def main(cfg: Config):
         ntuple_tag=ntuple_tag,
         friends=friends,
         campaigns=campaigns,
+        channels=channels,
         samples=samples,
     )
 

@@ -106,6 +106,11 @@ class Campaign:
 
 
 @dataclass
+class Channel:
+    name: str
+
+
+@dataclass
 class Friend:
     name: str
     include_channels: list[str] | None = field(default=None)
@@ -156,4 +161,5 @@ class Config:
     network: Network
     training: Training
     campaigns: list[Campaign]
+    channels: list[Channel]
     ntuple: NTupleSource

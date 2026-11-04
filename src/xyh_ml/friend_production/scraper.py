@@ -5,7 +5,7 @@ import re
 import uproot
 from XRootD.client import FileSystem
 
-from xyh_ml.config.dataclasses import Campaign, Friend
+from xyh_ml.config.dataclasses import Campaign, Channel, Friend
 from xyh_ml.friend_production.dataclasses import Sample, Shift, Variable
 from xyh_ml.friend_production.xrootd import (
     get_channel_dirs,
@@ -125,8 +125,12 @@ def scrape_metadata(
     ntuple_tag: str,
     friends: list[Friend],
     campaigns: list[Campaign],
+    channels: list[Channel],
     samples: list[str] = None,
 ):
+    # Names of the channels to scrape
+    channel_names = {channel.name for channel in channels}
+
     # Create a lookup for campaigns by era
     eras_lookup = {campaign.era: campaign for campaign in campaigns}
 
@@ -168,6 +172,14 @@ def scrape_metadata(
             for channel, channel_dir in get_channel_dirs(
                 xrd_fs, sample_dir
             ).items():
+                # Skip channels that are not in the list of channels
+                if channel not in channel_names:
+                    logger.info(
+                        f"Skipping channel {channel} of sample {sample} "
+                        + f"({era}) as it is not in the list of channels."
+                    )
+                    continue
+
                 # Get the main filelist for this sample
                 main_files = get_files(xrd_fs, channel_dir)
 

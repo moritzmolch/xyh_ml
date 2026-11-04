@@ -5,6 +5,7 @@
 defaults:
 - base/artifacts@artifacts
 - base/campaigns@campaigns
+- base/channels@channels
 - base/data_source@data_source
 - base/dataset@dataset
 - base/mode@mode
