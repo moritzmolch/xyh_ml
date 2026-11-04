@@ -2,16 +2,25 @@ import logging
 from pathlib import Path
 
 import hydra
+import numpy as np
 import pandas as pd
+import torch
 import uproot
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.config.dataclasses import Config
+from xyh_ml.config.dataclasses import Campaign, Config, Variable
+from xyh_ml.data.data_frame import prepare_with_parameter_values
+from xyh_ml.data.torch import create_torch_dataset_for_evaluation
 from xyh_ml.friend_production.dataclasses import Chunk, FileSlice, Sample
-from xyh_ml.io import load_json
+from xyh_ml.io import load_json, load_transformations
+from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
+from xyh_ml.nn.predictions import predict
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Name of the event column
+EVENT_COLUMN_NAME = "event"
 
 
 def _get_num_entries(file: str, tree: str = "ntuple") -> int:
@@ -218,6 +227,167 @@ def load_data_frame(
     return pd.concat(data_frames)
 
 
+def _process_fold(
+    data_frame: pd.DataFrame,
+    fold: int,
+    n_folds: int,
+    input_variables: list[Variable],
+    input_parameters: list[Variable],
+    output_variable: Variable,
+    output_classes: list[Variable],
+    models: dict[int, torch.nn.Module],
+    transformations: dict[int, dict[str, dict[str, any]]],
+    batch_size: int,
+):
+    # Only keep events that have not been used for training in this
+    # fold
+    fold_data_frame = data_frame[
+        data_frame[EVENT_COLUMN_NAME] % n_folds == fold
+    ]
+
+    # Get the fold transformations and the fold model
+    fold_transformations = transformations[fold]
+    fold_model = models[fold]
+
+    # Prepare the torch dataset
+    fold_dataset = create_torch_dataset_for_evaluation(
+        fold_data_frame,
+        input_variables,
+        input_parameters,
+        fold_transformations,
+    )
+
+    # Evaluate the model
+    predictions = predict(
+        fold_dataset,
+        fold_model,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        batch_size=batch_size,
+    )
+
+    # Reorder predictions such that they match the order of output
+    # classes in the configuration file
+    # Store the predictions in a data frame with the same index as the
+    # fold data frame
+    t = transformations["ordinal_encoding"]["transformation"]
+    i_category = t.feature_names_in_.tolist().index(output_variable.name)
+    transformation_categories = t.categories_[i_category].tolist()
+    correct_order = [
+        transformation_categories.index(output_class.name)
+        for output_class in enumerate(output_classes)
+    ]
+    predictions = predictions[:, correct_order]
+
+    # Store the predictions and the class with maximum score in the
+    # fold data frame
+    fold_data_frame[
+        [f"score_{output_class.name}" for output_class in output_classes]
+    ] = predictions
+    fold_data_frame["max_score_index"] = np.argmax(predictions, axis=1)
+    fold_data_frame["max_score_name"] = fold_data_frame[
+        "max_score_index"
+    ].apply(lambda i: output_classes[i].name)
+
+    return fold_data_frame
+
+
+def _flatten_scores(
+    data_frame: pd.DataFrame,
+    n_events: int,
+    parameter_values: pd.DataFrame,
+    output_classes: list[Variable],
+):
+    # Flatten score structure again
+    score_columns = [
+        f"score_{output_class.name}" for output_class in output_classes
+    ] + ["max_score_index", "max_score_name"]
+    data_frame = data_frame[score_columns]
+    scores_flattened = (
+        data_frame[score_columns]
+        .to_numpy()
+        .reshape(
+            n_events,
+            parameter_values.shape[0] * len(score_columns),
+        )
+    )
+
+    # Construct column names for the flattened scores
+    column_names_flattened = []
+    for _, parameter_value in parameter_values.iterrows():
+        for score_column in score_columns:
+            parameter_value_str = "_".join(
+                f"{col}_{int(val)}"
+                for col, val in parameter_value.to_dict().items()
+            )
+            column_names_flattened.append(
+                f"{score_column}_{parameter_value_str}"
+            )
+
+    return scores_flattened, column_names_flattened
+
+
+def _process_chunk(
+    chunk: Chunk,
+    columns: list[str],
+    sample: Sample,
+    input_variables: list[Variable],
+    input_parameters: list[Variable],
+    output_variable: Variable,
+    output_classes: list[Variable],
+    campaigns: list[Campaign],
+    parameter_values: pd.DataFrame,
+    models: dict[int, torch.nn.Module],
+    transformations: dict[int, dict[str, dict[str, any]]],
+    n_folds: int,
+    batch_size: int,
+):
+    # Create eras lookup table
+    eras_lookup = {c.era: c for c in campaigns}
+
+    # Load the data frame for the chunk and add the campaign column
+    logger.info(f"Chunk {chunk.index} has {chunk.num_entries} entries.")
+    chunk_data_frame = load_data_frame(chunk, columns=columns)
+    chunk_data_frame["campaign"] = eras_lookup[sample.era].name
+
+    # Prepare data frames for evaluation of multiple input parameter values
+    data_frame = prepare_with_parameter_values(
+        chunk_data_frame,
+        parameter_values,
+    )
+
+    # Split data frame into folds and evaluate the model for each fold
+    orig_index = data_frame.index
+    fold_data_frames = [
+        _process_fold(
+            data_frame,
+            i,
+            n_folds,
+            input_variables,
+            input_parameters,
+            output_variable,
+            output_classes,
+            models,
+            transformations,
+            batch_size,
+        )
+        for i in range(n_folds)
+    ]
+
+    # Merge fold data frames
+    data_frame_eval = pd.concat(fold_data_frames)
+    data_frame_eval = data_frame_eval.loc[orig_index]
+
+    scores_flattened, column_names_flattened = _flatten_scores(
+        data_frame_eval,
+        chunk_data_frame.shape[0],
+        parameter_values,
+        output_classes,
+    )
+    chunk_data_frame[column_names_flattened] = scores_flattened
+
+    return chunk_data_frame
+
+
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
     config_name="produce",
@@ -281,11 +451,30 @@ def main(cfg: Config):
         model.load_state_dict(best_model_state_dict)
 
         # Store the model for this fold
-        fold_models[fold] = model
+        models[fold] = model
 
     # Get sample metadata
     samples = [Sample(**s) for s in load_json(metadata_file)]
     sample = next(samples)
+
+    # Determine chunks for the first sample and log their sizes
+    chunks = determine_chunks(samples[0], chunk_size=10_000)
+    for chunk in chunks:
+        _process_chunk(
+            chunk,
+            columns,
+            sample,
+            inputs.variables,
+            inputs.parameters,
+            output_variable,
+            output_classes,
+            campaigns,
+            parameter_values,
+            models,
+            transformations,
+            n_folds,
+            cfg.training.batch_size,
+        )
 
 
 if __name__ == "__main__":
