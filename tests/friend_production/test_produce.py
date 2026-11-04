@@ -898,7 +898,7 @@ def test_campaign_name():
 
 
 def _produce_friend(sample, output_file, models, transformations, **kwargs):
-    produce.produce_friend(
+    return produce.produce_friend(
         sample,
         output_file,
         ["event", "pt"],
@@ -980,3 +980,92 @@ def test_produce_friend_empty_main_file(
     with uproot.open(output_file) as f:
         assert f["ntuple"].num_entries == 0
         assert len(f["ntuple"].keys()) == 2 * len(SCORE_COLUMNS)
+
+
+def test_produce_friend_profile(tmp_path, write_tree, models, transformations):
+    events = list(range(10, 17))
+    main = write_tree(
+        "main.root",
+        {"event": events, "pt": np.linspace(10.0, 40.0, len(events))},
+    )
+
+    profiler = _produce_friend(
+        _sample([main]),
+        tmp_path / "friend.root",
+        models,
+        transformations,
+        chunk_size=3,
+    )
+    summary = profiler.summary()
+
+    # Two parameter values per event
+    assert (summary["n_chunks"], summary["n_events"], summary["n_rows"]) == (
+        3,
+        7,
+        14,
+    )
+    assert set(summary["stages"]) == {
+        "total",
+        "load",
+        "prepare",
+        "evaluate",
+        "predict",
+        "flatten",
+        "write",
+    }
+    stages = summary["stages"]
+    assert stages["predict"]["total_s"] <= stages["evaluate"]["total_s"]
+    assert stages["evaluate"]["total_s"] <= stages["total"]["total_s"]
+    for stage in stages.values():
+        assert stage["per_row_s"] == pytest.approx(stage["total_s"] / 14)
+        assert stage["per_event_s"] == pytest.approx(stage["total_s"] / 7)
+
+    memory = summary["memory"]
+    # The largest loaded chunk has 3 events, expanded to 6 rows
+    assert 0 < memory["loaded_data_frame_max_bytes"]
+    assert (
+        memory["loaded_data_frame_max_bytes"]
+        < memory["expanded_data_frame_max_bytes"]
+    )
+    assert memory["rss_peak_bytes"] >= memory["rss_start_bytes"]
+
+
+def test_produce_friend_profile_given_profiler(
+    tmp_path, write_tree, models, transformations
+):
+    main = write_tree("main.root", {"event": [10, 11], "pt": [12.0, 18.0]})
+    profiler = produce.Profiler()
+
+    returned = _produce_friend(
+        _sample([main]),
+        tmp_path / "friend.root",
+        models,
+        transformations,
+        chunk_size=5,
+        profiler=profiler,
+    )
+
+    assert returned is profiler
+    assert profiler.n_events == 2
+
+
+def test_warm_up_models_moves_models_to_device_and_evaluates():
+    calls = []
+
+    class Recorder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = torch.nn.Linear(3, 2)
+
+        def forward(self, x):
+            calls.append(tuple(x.shape))
+            return self.layer(x)
+
+    models = {0: Recorder().train(), 1: Recorder().train()}
+
+    produce._warm_up_models(models, input_size=3)
+
+    assert calls == [(1, 3), (1, 3)]
+    for model in models.values():
+        assert not model.training
+        assert next(model.parameters()).device.type == produce._device()

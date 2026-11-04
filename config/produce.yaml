@@ -34,6 +34,11 @@ output_dir: data/output/friends/${ntuple.tag}/CROWNFriend/${friend_name}
 # Explicit output file, overrides the default path derived from `output_dir`
 output_file: null
 
+# Optional JSON file for the profile of the friend production (time per stage
+# per event and per row, data frame sizes, peak memory). The profile is always
+# logged.
+profile_file: null
+
 # Number of events evaluated at once. Every event is evaluated for every
 # entry in `parameter_values`, so a chunk has
 # chunk_size * len(parameter_values) rows.

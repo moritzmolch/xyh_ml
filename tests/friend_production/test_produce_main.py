@@ -2,6 +2,7 @@
 ``produce`` configuration and small models stored like training artifacts."""
 
 import dataclasses
+import json
 
 import numpy as np
 import pandas as pd
@@ -153,6 +154,22 @@ def test_main_writes_friend_for_input_file(setup):
         arrays["max_score_m_x_400_m_y_100"],
         arrays["max_score_m_x_1000_m_y_300"],
     )
+
+
+def test_main_writes_profile(setup, tmp_path):
+    cfg, _ = setup
+    cfg.profile_file = str(tmp_path / "profile" / "profile.json")
+
+    produce.main(cfg)
+
+    profile = json.loads((tmp_path / "profile" / "profile.json").read_text())
+    assert profile["n_events"] == N_EVENTS
+    assert profile["n_rows"] == N_EVENTS * len(PARAMETER_VALUES)
+    # chunk_size=3
+    assert profile["n_chunks"] == 3
+    assert profile["stages"]["predict"]["per_row_s"] > 0
+    assert profile["memory"]["loaded_data_frame_max_bytes"] > 0
+    assert profile["memory"]["rss_peak_bytes"] > 0
 
 
 def test_main_default_output_file(setup, tmp_path):

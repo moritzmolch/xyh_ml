@@ -22,6 +22,7 @@ from xyh_ml.config.dataclasses import (
 from xyh_ml.data.data_frame import prepare_with_parameter_values
 from xyh_ml.data.torch import create_torch_dataset_for_evaluation
 from xyh_ml.friend_production.dataclasses import Chunk, FileSlice, Sample
+from xyh_ml.friend_production.profiling import Profiler
 from xyh_ml.io import load_json, load_transformations
 from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 from xyh_ml.nn.predictions import predict
@@ -291,9 +292,13 @@ def _process_fold(
     models: dict[int, torch.nn.Module],
     transformations: dict[int, dict[str, dict[str, Any]]],
     batch_size: int,
+    profiler: Profiler | None = None,
 ) -> pd.DataFrame:
     """Evaluate the model of ``fold`` on the events of ``data_frame`` that
     were held out in its training (``event % n_folds == fold``).
+
+    The time spent in the model evaluation is added to the stage
+    ``predict`` of ``profiler``.
 
     Returns a copy of these events with the columns ``max_score`` (highest
     softmax score) and ``max_score_index`` (index of the class with the
@@ -328,13 +333,15 @@ def _process_fold(
     # Evaluate the model. The dataset is already in memory, so no data loader
     # worker processes are used; forking them from the multi-threaded process
     # for every fold and chunk is slow and can deadlock.
-    predictions = predict(
-        fold_model,
-        fold_dataset,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        data_loader_num_workers=0,
-        batch_size=batch_size,
-    )
+    profiler = profiler if profiler is not None else Profiler()
+    with profiler.measure("predict"):
+        predictions = predict(
+            fold_model,
+            fold_dataset,
+            device=_device(),
+            data_loader_num_workers=0,
+            batch_size=batch_size,
+        )
 
     # Reorder predictions such that they match the order of output
     # classes in the configuration file. The model outputs are ordered like
@@ -400,44 +407,82 @@ def _process_chunk(
     transformations: dict[int, dict[str, dict[str, Any]]],
     n_folds: int,
     batch_size: int,
+    profiler: Profiler | None = None,
 ) -> pd.DataFrame:
     """Load a chunk, evaluate the fold models for all parameter values and
     return the flattened scores (see :func:`_flatten_scores`) with one row
-    per event, in the order of the events in the chunk."""
+    per event, in the order of the events in the chunk.
+
+    The stages ``load``, ``prepare``, ``evaluate`` (including ``predict``)
+    and ``flatten`` are timed with ``profiler``, which also records the size
+    of the loaded (``loaded``) and the expanded (``expanded``) data frame.
+    """
+    profiler = profiler if profiler is not None else Profiler()
+
     # Load the data frame for the chunk and add the campaign column
     logger.info(f"Chunk {chunk.index} has {chunk.num_entries} entries.")
-    chunk_data_frame = load_data_frame(chunk, columns=columns)
-    chunk_data_frame["campaign"] = campaign_name
+    with profiler.measure_memory("load"):
+        chunk_data_frame = load_data_frame(chunk, columns=columns)
+        chunk_data_frame["campaign"] = campaign_name
+    profiler.add_data_frame("loaded", chunk_data_frame)
 
     # Prepare data frames for evaluation of multiple input parameter values
-    data_frame = prepare_with_parameter_values(
-        chunk_data_frame,
-        parameter_values,
-    )
+    with profiler.measure_memory("prepare"):
+        data_frame = prepare_with_parameter_values(
+            chunk_data_frame,
+            parameter_values,
+        )
+    profiler.add_data_frame("expanded", data_frame)
 
     # Split data frame into folds and evaluate the model for each fold
-    fold_data_frames = [
-        _process_fold(
-            data_frame,
-            i,
-            n_folds,
-            input_variables,
-            input_parameters,
-            output_variable,
-            output_classes,
-            models,
-            transformations,
-            batch_size,
-        )
-        for i in range(n_folds)
-    ]
+    with profiler.measure("evaluate"):
+        fold_data_frames = [
+            _process_fold(
+                data_frame,
+                i,
+                n_folds,
+                input_variables,
+                input_parameters,
+                output_variable,
+                output_classes,
+                models,
+                transformations,
+                batch_size,
+                profiler=profiler,
+            )
+            for i in range(n_folds)
+        ]
 
     # Merge fold data frames and flatten the scores to one row per event
-    data_frame_eval = pd.concat(fold_data_frames)
-    scores = _flatten_scores(data_frame_eval, parameter_values)
+    with profiler.measure("flatten"):
+        data_frame_eval = pd.concat(fold_data_frames)
+        scores = _flatten_scores(data_frame_eval, parameter_values)
+
+    profiler.add_chunk(len(chunk_data_frame), len(data_frame))
 
     # Return the scores in the order of the events of the chunk
     return scores.reindex(chunk_data_frame.index)
+
+
+def _device() -> str:
+    """Device the models are evaluated on."""
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _warm_up_models(models: dict[int, torch.nn.Module], input_size: int):
+    """Move the models to the evaluation device and evaluate them once.
+
+    The first CUDA operation of the process initializes the CUDA context,
+    which takes seconds and allocates a large amount of host memory. Doing
+    this before the friend production keeps it out of the timing and memory
+    profile of the evaluation.
+    """
+    device = _device()
+    with torch.no_grad():
+        for model in models.values():
+            model.eval().to(device)(torch.zeros(1, input_size, device=device))
+    if device == "cuda":
+        torch.cuda.synchronize()
 
 
 def _fold_training_dirs(cfg: DictConfig) -> dict[int, Path]:
@@ -498,6 +543,7 @@ def write_friend_file(
     num_entries: int,
     data_frames: Iterable[pd.DataFrame],
     tree: str = "ntuple",
+    profiler: Profiler | None = None,
 ) -> None:
     """Write a friend tree with ``num_entries`` entries to ``output_file``.
 
@@ -506,14 +552,20 @@ def write_friend_file(
     that the friend tree is aligned entry by entry with the main tree. The
     file is written to a temporary file first and only moved to
     ``output_file`` if all entries were written, so that no incomplete
-    friend file is left behind.
+    friend file is left behind. The time spent writing is added to the
+    stage ``write`` of ``profiler``.
     """
+    profiler = profiler if profiler is not None else Profiler()
     output_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_file = output_file.with_name(output_file.name + ".tmp")
 
     try:
-        with uproot.recreate(tmp_file) as f:
+        # Creating the tree with all branches and closing the file (which
+        # writes the remaining baskets and metadata) count as writing, too
+        with profiler.measure("write"):
+            f = uproot.recreate(tmp_file)
             f.mktree(tree, branch_types)
+        try:
             n_written = 0
             for df in data_frames:
                 entries = df.index.get_level_values("entry").to_numpy()
@@ -534,13 +586,17 @@ def write_friend_file(
                     raise KeyError(msg)
 
                 if len(df):
-                    f[tree].extend(
-                        {
-                            name: df[name].to_numpy(dtype=dtype)
-                            for name, dtype in branch_types.items()
-                        }
-                    )
+                    with profiler.measure("write"):
+                        f[tree].extend(
+                            {
+                                name: df[name].to_numpy(dtype=dtype)
+                                for name, dtype in branch_types.items()
+                            }
+                        )
                 n_written += len(df)
+        finally:
+            with profiler.measure("write"):
+                f.close()
 
         if n_written != num_entries:
             msg = (
@@ -644,14 +700,24 @@ def produce_friend(
     n_folds: int,
     batch_size: int,
     chunk_size: int,
-) -> None:
+    profiler: Profiler | None = None,
+) -> Profiler:
     """Evaluate the models for all events of the single main file of
     ``sample`` and write the scores to the friend file ``output_file``.
 
     The friend tree has one entry per entry of the main tree. For main files
     without entries (or without ``ntuple`` tree), an empty friend tree with
     all branches is written.
+
+    Returns the profiler with the time per stage (``total`` and the stages
+    of :func:`_process_chunk` and :func:`write_friend_file`) and the memory
+    usage. If no ``profiler`` is given, a new one is created and its memory
+    tracking is started here.
     """
+    if profiler is None:
+        profiler = Profiler()
+        profiler.start_memory_tracking()
+
     (main_file,) = sample.main_files
     num_entries = _get_num_entries(main_file)
     chunks = determine_chunks(sample, chunk_size=chunk_size)
@@ -678,15 +744,20 @@ def produce_friend(
             transformations,
             n_folds,
             batch_size,
+            profiler=profiler,
         )
         for chunk in chunks
     )
-    write_friend_file(
-        output_file,
-        score_branch_types(branch_names),
-        num_entries,
-        scores,
-    )
+    with profiler.measure("total"):
+        write_friend_file(
+            output_file,
+            score_branch_types(branch_names),
+            num_entries,
+            scores,
+            profiler=profiler,
+        )
+
+    return profiler
 
 
 @hydra.main(
@@ -739,6 +810,16 @@ def main(cfg: Config):
             cfg.network,
         )
 
+    # Initialize the evaluation device before profiling
+    _warm_up_models(
+        models, len(cfg.inputs.variables) + len(cfg.inputs.parameters)
+    )
+
+    # Track the memory usage of the friend production only, not of the
+    # loading of the configuration and the models
+    profiler = Profiler()
+    profiler.start_memory_tracking()
+
     produce_friend(
         sample,
         output_file,
@@ -754,7 +835,13 @@ def main(cfg: Config):
         cfg.mode.n_folds,
         cfg.training.batch_size,
         cfg.chunk_size,
+        profiler=profiler,
     )
+
+    # Report time per event and per row and the memory usage
+    profiler.log_summary()
+    if cfg.profile_file:
+        profiler.dump(Path(cfg.profile_file))
 
 
 if __name__ == "__main__":
