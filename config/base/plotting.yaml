@@ -1,0 +1,4 @@
+# Merge the predictions of all folds 0, ..., n_folds - 1 written by
+# evaluate_test_sample into a single plot instead of plotting the held-out
+# fold mode.fold only
+merge_folds: false

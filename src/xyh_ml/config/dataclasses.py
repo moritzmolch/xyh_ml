@@ -63,6 +63,11 @@ class Mode:
 
 
 @dataclass
+class Plotting:
+    merge_folds: bool = field(default=False)
+
+
+@dataclass
 class Dataset:
     train_frac: float
 
@@ -163,3 +168,4 @@ class Config:
     campaigns: list[Campaign]
     channels: list[Channel]
     ntuple: NTupleSource
+    plotting: Plotting
