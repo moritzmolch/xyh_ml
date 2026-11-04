@@ -45,7 +45,6 @@ def get_shifts(
         # Get the corresponding friends and extract their keys as well
         for friend_file_list in friend_files.values():
             friend_file = friend_file_list[i]
-            print(friend_file)
             with uproot.open(friend_file) as f:
                 # Check if the friend ntuple tree exists and if it has entries
                 if "ntuple" not in f:
@@ -139,7 +138,7 @@ def scrape_metadata(
     for era, era_dir in get_era_dirs(
         xrd_fs, os.path.join(base_dir, ntuple_tag)
     ).items():
-        # If era is not in the campaigns list, raise an error
+        # Skip eras without a campaign
         if era not in eras_lookup:
             logger.warning(
                 f"Folder '{era}' ignored as it is not appearing in the list "
