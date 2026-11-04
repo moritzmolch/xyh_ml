@@ -60,8 +60,10 @@ profile_file: null
 
 # Number of events evaluated at once. Every event is evaluated for every
 # entry in `parameter_values`, so a chunk has
-# chunk_size * len(parameter_values) rows.
-chunk_size: 1000
+# chunk_size * len(parameter_values) rows. The peak memory grows by about
+# 175 KiB per event of a chunk (about 1.7 GiB for 10000 events); larger chunks
+# are not faster.
+chunk_size: 10000
 
 parameter_values:
 - m_x: 400
