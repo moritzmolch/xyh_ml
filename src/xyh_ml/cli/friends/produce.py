@@ -8,10 +8,13 @@ import pandas as pd
 import torch
 import uproot
 
+from omegaconf import DictConfig, OmegaConf
+
 from xyh_ml import PROJECT_DIR
 from xyh_ml.config.dataclasses import (
     Campaign,
     Config,
+    Network,
     OutputClass,
     Variable,
 )
@@ -429,6 +432,58 @@ def _process_chunk(
     )
 
 
+def _fold_training_dirs(cfg: DictConfig) -> dict[int, Path]:
+    """Return the training directory of the model of each fold.
+
+    ``artifacts.training_dir`` is interpolated from ``mode.fold``, so it is
+    resolved again with ``mode.fold`` set to each fold.
+    """
+    return {
+        fold: Path(
+            OmegaConf.merge(
+                cfg, {"mode": {"fold": fold}}
+            ).artifacts.training_dir
+        )
+        for fold in range(cfg.mode.n_folds)
+    }
+
+
+def _load_fold_model(
+    training_dir: Path,
+    input_size: int,
+    output_size: int,
+    network: Network,
+) -> tuple[torch.nn.Module, dict[str, dict[str, Any]]]:
+    """Load the best model and the transformations of one fold from its
+    training directory."""
+    # Load transformations from the training artifacts
+    transformations = load_transformations(
+        training_dir / "transformations.pkl"
+    )
+
+    # Create the neural network model
+    model = create_multi_layer_perceptron_model(
+        input_size, output_size, network
+    )
+
+    # Load checkpoints from the training artifacts
+    state_dict = torch.load(
+        training_dir / "best_model.ckpt", map_location="cpu", weights_only=True
+    )["state_dict"]
+
+    # Rename keys in the state dict to match the bare model's keys if they
+    # are prefixed with "model." (Lightning module attribute)
+    state_dict = {
+        key.removeprefix("model."): value for key, value in state_dict.items()
+    }
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    logger.info(f"Loaded model and transformations from {training_dir}")
+
+    return model, transformations
+
+
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
     config_name="produce",
@@ -457,48 +512,16 @@ def main(cfg: Config):
     # Number of folds to split the data into for cross-validation
     n_folds = cfg.mode.n_folds
 
-    # Get the models for all folds
-    training_dir = cfg.artifacts.training_dir
+    # Get the models and transformations for all folds
     models = {}
     transformations = {}
-    for fold in range(n_folds):
-        # Replace the fold placeholder with the actual fold number
-        # TODO This should be coded in a more robust way
-        fold_training_dir = Path(
-            training_dir.replace(
-                f"fold{cfg.mode.fold}of{n_folds}", f"fold{fold}of{n_folds}"
-            )
-        )
-
-        # Load transformations from the training artifacts
-        transformations[fold] = load_transformations(
-            fold_training_dir / "transformations.pkl"
-        )
-
-        # Create the neural network model
-        model = create_multi_layer_perceptron_model(
+    for fold, training_dir in _fold_training_dirs(cfg).items():
+        models[fold], transformations[fold] = _load_fold_model(
+            training_dir,
             len(cfg.inputs.variables) + len(cfg.inputs.parameters),
             len(cfg.outputs.classes),
             cfg.network,
         )
-
-        # Load checkpoints from the training artifacts
-        best_model_ckpt_file = fold_training_dir / "best_model.ckpt"
-        best_model_state_dict = torch.load(
-            best_model_ckpt_file, map_location="cpu", weights_only=True
-        )["state_dict"]
-
-        # Rename keys in the state dict to match the bare model's keys if they are
-        # prefixed with "model."
-        for key in list(best_model_state_dict.keys()):
-            new_key = key
-            if key.startswith("model."):
-                new_key = key.replace("model.", "", 1)
-            best_model_state_dict[new_key] = best_model_state_dict.pop(key)
-        model.load_state_dict(best_model_state_dict)
-
-        # Store the model for this fold
-        models[fold] = model
 
     # Get sample metadata
     # The models are trained per channel, so only process samples of the

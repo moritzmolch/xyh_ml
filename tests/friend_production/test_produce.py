@@ -1,15 +1,25 @@
 """Tests for the functions of the friend production CLI script."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 import torch
 import uproot
+from omegaconf import OmegaConf
 
 from xyh_ml.cli.friends import produce
-from xyh_ml.config.dataclasses import Campaign, OutputClass, Variable
+from xyh_ml.config.dataclasses import (
+    Campaign,
+    Network,
+    OutputClass,
+    Variable,
+)
 from xyh_ml.data.data_frame import prepare_with_parameter_values
 from xyh_ml.data.transformations import derive_transformations
+from xyh_ml.io import dump_transformations
+from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 from xyh_ml.friend_production.dataclasses import (
     Chunk,
     FileSlice,
@@ -541,3 +551,65 @@ def test_process_chunk(write_tree, models, transformations, parameter_values):
             expected,
             rtol=1e-6,
         )
+
+
+# ---------------------------------------------------- loading of the models
+
+
+def test_fold_training_dirs_resolve_fold_interpolation():
+    cfg = OmegaConf.create(
+        {
+            "mode": {"n_folds": 3, "fold": 1, "channel": "mt"},
+            "artifacts": {
+                "training_dir": (
+                    "out/fold${mode.fold}of${mode.n_folds}/${mode.channel}"
+                )
+            },
+        }
+    )
+
+    dirs = produce._fold_training_dirs(cfg)
+
+    assert dirs == {
+        0: Path("out/fold0of3/mt"),
+        1: Path("out/fold1of3/mt"),
+        2: Path("out/fold2of3/mt"),
+    }
+    # The configuration itself is not changed
+    assert cfg.mode.fold == 1
+
+
+def test_load_fold_model(tmp_path, transformations):
+    network = Network(hidden_layers=[4], activation="relu", dropout_frac=0.0)
+    torch.manual_seed(0)
+    trained = create_multi_layer_perceptron_model(3, 2, network)
+
+    # Checkpoint as written by the Lightning module, which holds the network
+    # as attribute "model"
+    torch.save(
+        {
+            "state_dict": {
+                f"model.{k}": v for k, v in trained.state_dict().items()
+            }
+        },
+        tmp_path / "best_model.ckpt",
+    )
+    dump_transformations(tmp_path / "transformations.pkl", transformations[0])
+
+    model, loaded_transformations = produce._load_fold_model(
+        tmp_path, 3, 2, network
+    )
+
+    assert not model.training
+    for key, value in trained.state_dict().items():
+        torch.testing.assert_close(model.state_dict()[key], value)
+    assert loaded_transformations.keys() == transformations[0].keys()
+    x = torch.rand(5, 3)
+    torch.testing.assert_close(model(x), trained.eval()(x))
+
+
+def test_load_fold_model_missing_artifacts(tmp_path):
+    network = Network(hidden_layers=[4], activation="relu", dropout_frac=0.0)
+
+    with pytest.raises(FileNotFoundError):
+        produce._load_fold_model(tmp_path, 3, 2, network)
