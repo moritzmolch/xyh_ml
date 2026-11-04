@@ -35,6 +35,10 @@ EVENT_COLUMN_NAME = "event"
 # Index levels of the data frames returned by load_data_frame
 INDEX_NAMES = ["chunk", "slice", "entry"]
 
+# Columns evaluated per event and parameter value combination and written to
+# the friend tree
+SCORE_COLUMNS = ["max_score", "max_score_index"]
+
 
 def _get_num_entries(file: str, tree: str = "ntuple") -> int:
     """Return the number of entries of ``tree`` in ``file``, or 0 if the tree
@@ -251,18 +255,11 @@ def load_data_frame(
     return pd.concat(data_frames)
 
 
-def _score_columns(output_classes: list[OutputClass]) -> list[str]:
-    return [f"score_{output_class.name}" for output_class in output_classes]
-
-
-def score_branch_names(
-    parameter_values: pd.DataFrame,
-    output_classes: list[OutputClass],
-) -> list[str]:
+def score_branch_names(parameter_values: pd.DataFrame) -> list[str]:
     """Names of the friend tree branches: for every parameter value
-    combination (outer loop) the scores and ``max_score_index`` (inner loop),
-    e.g. ``score_sig_m_x_400_m_y_100``."""
-    score_columns = _score_columns(output_classes) + ["max_score_index"]
+    combination (outer loop) the columns in ``SCORE_COLUMNS`` (inner loop),
+    e.g. ``max_score_m_x_400_m_y_100`` and
+    ``max_score_index_m_x_400_m_y_100``."""
     parameter_value_strs = [
         "_".join(f"{col}_{int(val)}" for col, val in row.items())
         for row in parameter_values.to_dict(orient="records")
@@ -270,13 +267,13 @@ def score_branch_names(
     return [
         f"{score_column}_{parameter_value_str}"
         for parameter_value_str in parameter_value_strs
-        for score_column in score_columns
+        for score_column in SCORE_COLUMNS
     ]
 
 
 def score_branch_types(branch_names: list[str]) -> dict[str, type]:
     """Types of the friend tree branches: ``int32`` for ``max_score_index``
-    branches, ``float32`` for scores."""
+    branches, ``float32`` for ``max_score`` branches."""
     return {
         name: np.int32 if name.startswith("max_score_index") else np.float32
         for name in branch_names
@@ -298,12 +295,10 @@ def _process_fold(
     """Evaluate the model of ``fold`` on the events of ``data_frame`` that
     were held out in its training (``event % n_folds == fold``).
 
-    Returns a copy of these events with the columns ``score_<class>`` (in
-    the order of ``output_classes``), ``max_score_index`` and
-    ``max_score_name``.
+    Returns a copy of these events with the columns ``max_score`` (highest
+    softmax score) and ``max_score_index`` (index of the class with the
+    highest score in ``output_classes``).
     """
-    score_columns = _score_columns(output_classes)
-    class_names = np.array([c.name for c in output_classes])
 
     # Only keep events that have not been used for training in this
     # fold. Copy to be able to add columns without modifying the input.
@@ -314,9 +309,8 @@ def _process_fold(
     # Nothing to evaluate if no event of the chunk belongs to this fold
     if fold_data_frame.empty:
         return fold_data_frame.assign(
-            **{c: pd.Series(dtype=np.float32) for c in score_columns},
+            max_score=pd.Series(dtype=np.float32),
             max_score_index=pd.Series(dtype=np.int64),
-            max_score_name=pd.Series(dtype=object),
         )
 
     # Get the fold transformations and the fold model
@@ -354,11 +348,12 @@ def _process_fold(
     ]
     predictions = predictions[:, correct_order]
 
-    # Store the predictions and the class with maximum score in the
-    # fold data frame
+    # Store the maximum score and the index of the class with the maximum
+    # score of every event in the fold data frame
     max_score_index = np.argmax(predictions, axis=1)
-    max_score = predictions[max_score_index]
-    fold_data_frame["max_score"] = max_score
+    fold_data_frame["max_score"] = np.take_along_axis(
+        predictions, max_score_index[:, np.newaxis], axis=1
+    )[:, 0]
     fold_data_frame["max_score_index"] = max_score_index
 
     return fold_data_frame
@@ -367,31 +362,27 @@ def _process_fold(
 def _flatten_scores(
     data_frame: pd.DataFrame,
     parameter_values: pd.DataFrame,
-    output_classes: list[OutputClass],
 ) -> pd.DataFrame:
     """Turn the per-parameter-value rows of ``data_frame`` (index level
     ``parameter_value``) into one row per event.
 
     The returned data frame has the remaining index levels of ``data_frame``
-    (sorted) and the columns ``<score>_<parameter values>``, e.g.
-    ``score_sig_m_x_400_m_y_100``, for the scores and ``max_score_index``.
-    ``max_score_name`` is not included, as it is not numeric.
+    (sorted) and the columns ``<score column>_<parameter values>`` (see
+    :func:`score_branch_names`).
     """
-    score_columns = _score_columns(output_classes) + ["max_score_index"]
-
     # One row per event, columns (score column, parameter value index)
-    flat = data_frame[score_columns].unstack("parameter_value")
+    flat = data_frame[SCORE_COLUMNS].unstack("parameter_value")
 
     # Order columns by parameter value first, then by score column
     flat = flat.reorder_levels([1, 0], axis=1)
     flat = flat.reindex(
         columns=pd.MultiIndex.from_product(
-            [range(parameter_values.shape[0]), score_columns]
+            [range(parameter_values.shape[0]), SCORE_COLUMNS]
         )
     )
 
     # Construct column names for the flattened scores
-    flat.columns = score_branch_names(parameter_values, output_classes)
+    flat.columns = score_branch_names(parameter_values)
 
     return flat
 
@@ -443,7 +434,7 @@ def _process_chunk(
 
     # Merge fold data frames and flatten the scores to one row per event
     data_frame_eval = pd.concat(fold_data_frames)
-    scores = _flatten_scores(data_frame_eval, parameter_values, output_classes)
+    scores = _flatten_scores(data_frame_eval, parameter_values)
 
     # Return the scores in the order of the events of the chunk
     return scores.reindex(chunk_data_frame.index)
@@ -678,7 +669,7 @@ def produce_friend(
         + f"{len(chunks)} chunk(s)) to {output_file}"
     )
 
-    branch_names = score_branch_names(parameter_values, output_classes)
+    branch_names = score_branch_names(parameter_values)
 
     # Evaluate the chunks lazily while writing to keep the memory usage
     # limited to one chunk

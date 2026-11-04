@@ -307,11 +307,15 @@ OUTPUT_CLASSES = [
     OutputClass("tt", "ttbar", [], False),
     OutputClass("bkg", "Other", [], False),
 ]
-SCORE_COLUMNS = ["score_sig", "score_tt", "score_bkg"]
+CLASS_NAMES = [c.name for c in OUTPUT_CLASSES]
+SCORE_COLUMNS = ["max_score", "max_score_index"]
 N_FOLDS = 2
 
-# Class that the model of each fold prefers (by name)
+# Class that the model of each fold prefers (by name) and the logit of this
+# class (all others are 0). The logits differ, so that the maximum scores of
+# the folds differ as well.
 FOLD_PREFERRED_CLASS = {0: "tt", 1: "bkg"}
+FOLD_LOGIT = {0: 3.0, 1: 1.0}
 
 
 class ConstantModel(torch.nn.Module):
@@ -325,23 +329,28 @@ class ConstantModel(torch.nn.Module):
         return self.logits.expand(x.shape[0], -1)
 
 
-def _encoder_logits(preferred):
-    """Logits in ordinal encoder order (bkg, sig, tt) favouring a class."""
-    return [3.0 if c == preferred else 0.0 for c in ["bkg", "sig", "tt"]]
+def _encoder_logits(fold):
+    """Logits of the model of ``fold`` in ordinal encoder order (bkg, sig,
+    tt)."""
+    return [
+        FOLD_LOGIT[fold] if c == FOLD_PREFERRED_CLASS[fold] else 0.0
+        for c in ["bkg", "sig", "tt"]
+    ]
 
 
-def _expected_scores(preferred):
-    """Softmax scores in configuration order for a preferred class."""
-    e = np.exp([3.0 if c.name == preferred else 0.0 for c in OUTPUT_CLASSES])
-    return e / e.sum()
+def _expected(event):
+    """Expected (max_score, max_score_index) of an event, evaluated by the
+    model of fold ``event % N_FOLDS``; the index refers to the order of the
+    classes in the configuration."""
+    fold = event % N_FOLDS
+    e = np.exp(FOLD_LOGIT[fold])
+    max_score = e / (e + len(OUTPUT_CLASSES) - 1)
+    return max_score, CLASS_NAMES.index(FOLD_PREFERRED_CLASS[fold])
 
 
 @pytest.fixture
 def models():
-    return {
-        fold: ConstantModel(_encoder_logits(preferred))
-        for fold, preferred in FOLD_PREFERRED_CLASS.items()
-    }
+    return {fold: ConstantModel(_encoder_logits(fold)) for fold in FOLD_LOGIT}
 
 
 @pytest.fixture
@@ -411,21 +420,60 @@ def test_process_fold_selects_held_out_events(
 
 
 @pytest.mark.parametrize("fold", [0, 1])
-def test_process_fold_scores_in_config_order(
-    expanded, models, transformations, fold
-):
+def test_process_fold_max_score(expanded, models, transformations, fold):
     df = _process_fold(expanded, fold, models, transformations)
-    preferred = FOLD_PREFERRED_CLASS[fold]
+    max_score, max_score_index = _expected(fold)
 
-    np.testing.assert_allclose(
-        df[SCORE_COLUMNS].to_numpy(),
-        np.tile(_expected_scores(preferred), (len(df), 1)),
-        rtol=1e-6,
+    assert df.columns[-2:].tolist() == SCORE_COLUMNS
+    assert df["max_score"].shape == (len(df),)
+    np.testing.assert_allclose(df["max_score"], max_score, rtol=1e-6)
+    # Index in the order of the configuration, not of the encoder categories
+    assert (df["max_score_index"] == max_score_index).all()
+
+
+def test_process_fold_max_score_per_event(transformations):
+    """The maximum is taken per event (row) of the predictions."""
+    events = pd.DataFrame(
+        {
+            "event": [0, 2, 4],
+            "pt": [10.0, 20.0, 30.0],
+            "campaign": ["2024_nano_v15"] * 3,
+            "m_x": [400.0] * 3,
+        }
     )
-    np.testing.assert_allclose(df[SCORE_COLUMNS].sum(axis=1), 1.0, rtol=1e-6)
-    names = [c.name for c in OUTPUT_CLASSES]
-    assert (df["max_score_index"] == names.index(preferred)).all()
-    assert (df["max_score_name"] == preferred).all()
+
+    class PtModel(torch.nn.Module):
+        """Prefers sig (encoder index 1) for small pt, tt (index 2) for
+        large pt, with a margin growing with pt."""
+
+        def forward(self, x):
+            pt = x[:, :1]
+            return torch.cat([torch.zeros_like(pt), -pt, pt], dim=1)
+
+    df = produce._process_fold(
+        events,
+        0,
+        N_FOLDS,
+        INPUT_VARIABLES,
+        INPUT_PARAMETERS,
+        OUTPUT_VARIABLE,
+        OUTPUT_CLASSES,
+        {0: PtModel()},
+        transformations,
+        batch_size=2,
+    )
+
+    # Expected softmax from the standardized pt (mean 25, std sqrt(125) of
+    # the training data of the transformations fixture)
+    pt =(events["pt"].to_numpy() - 25.0) / np.sqrt(125.0)
+    logits = np.stack([np.zeros_like(pt), -pt, pt], axis=1)
+    probs = np.exp(logits) / np.exp(logits).sum(axis=1, keepdims=True)
+    np.testing.assert_allclose(df["max_score"], probs.max(axis=1), rtol=1e-5)
+    # Encoder order (bkg, sig, tt) -> configuration order (sig, tt, bkg)
+    to_config = {0: 2, 1: 0, 2: 1}
+    assert df["max_score_index"].tolist() == [
+        to_config[i] for i in probs.argmax(axis=1)
+    ]
 
 
 def test_process_fold_keeps_input(expanded, models, transformations):
@@ -442,7 +490,7 @@ def test_process_fold_without_events(expanded, models, transformations):
     df = _process_fold(even, 1, models, transformations)
 
     assert df.empty
-    assert set(SCORE_COLUMNS + ["max_score_index"]).issubset(df.columns)
+    assert set(SCORE_COLUMNS).issubset(df.columns)
 
 
 # ----------------------------------------------------------- _flatten_scores
@@ -462,7 +510,7 @@ def test_flatten_scores_one_row_per_event(
 ):
     evaluated = _evaluated(expanded, models, transformations)
 
-    flat = produce._flatten_scores(evaluated, parameter_values, OUTPUT_CLASSES)
+    flat = produce._flatten_scores(evaluated, parameter_values)
 
     assert flat.index.names == produce.INDEX_NAMES
     assert flat.index.tolist() == [
@@ -473,9 +521,7 @@ def test_flatten_scores_one_row_per_event(
         (0, 1, 2),
     ]
     assert flat.columns.tolist() == [
-        f"{c}_m_x_{m}"
-        for m in [400, 1000, 2000]
-        for c in SCORE_COLUMNS + ["max_score_index"]
+        f"{c}_m_x_{m}" for m in [400, 1000, 2000] for c in SCORE_COLUMNS
     ]
 
 
@@ -487,17 +533,14 @@ def test_flatten_scores_values(
         frac=1.0, random_state=1
     )
 
-    flat = produce._flatten_scores(evaluated, parameter_values, OUTPUT_CLASSES)
+    flat = produce._flatten_scores(evaluated, parameter_values)
 
     for (_, _, entry), row in flat.iterrows():
         event = {3: 10, 4: 11, 0: 12, 1: 13, 2: 14}[entry]
-        expected = _expected_scores(FOLD_PREFERRED_CLASS[event % N_FOLDS])
+        max_score, max_score_index = _expected(event)
         for m in [400, 1000, 2000]:
-            np.testing.assert_allclose(
-                [row[f"{c}_m_x_{m}"] for c in SCORE_COLUMNS],
-                expected,
-                rtol=1e-6,
-            )
+            assert row[f"max_score_m_x_{m}"] == pytest.approx(max_score)
+            assert row[f"max_score_index_m_x_{m}"] == max_score_index
 
 
 # ------------------------------------------------------------ _process_chunk
@@ -536,17 +579,12 @@ def test_process_chunk(write_tree, models, transformations, parameter_values):
         (0, 1, 0),
         (0, 1, 1),
     ]
-    assert df.columns.tolist() == produce.score_branch_names(
-        parameter_values, OUTPUT_CLASSES
-    )
+    assert df.columns.tolist() == produce.score_branch_names(parameter_values)
     events = [10, 11, 12, 13, 14]
     for event, (_, row) in zip(events, df.iterrows()):
-        expected = _expected_scores(FOLD_PREFERRED_CLASS[event % N_FOLDS])
-        np.testing.assert_allclose(
-            [row[f"{c}_m_x_2000"] for c in SCORE_COLUMNS],
-            expected,
-            rtol=1e-6,
-        )
+        max_score, max_score_index = _expected(event)
+        assert row["max_score_m_x_2000"] == pytest.approx(max_score)
+        assert row["max_score_index_m_x_2000"] == max_score_index
 
 
 # ---------------------------------------------------- loading of the models
@@ -616,24 +654,19 @@ def test_load_fold_model_missing_artifacts(tmp_path):
 
 def test_score_branch_names():
     parameter_values = pd.DataFrame({"m_x": [400, 1000], "m_y": [100, 300]})
-    classes = OUTPUT_CLASSES[:2]
 
-    names = produce.score_branch_names(parameter_values, classes)
+    names = produce.score_branch_names(parameter_values)
 
     assert names == [
-        "score_sig_m_x_400_m_y_100",
-        "score_tt_m_x_400_m_y_100",
+        "max_score_m_x_400_m_y_100",
         "max_score_index_m_x_400_m_y_100",
-        "score_sig_m_x_1000_m_y_300",
-        "score_tt_m_x_1000_m_y_300",
+        "max_score_m_x_1000_m_y_300",
         "max_score_index_m_x_1000_m_y_300",
     ]
     assert produce.score_branch_types(names) == {
-        "score_sig_m_x_400_m_y_100": np.float32,
-        "score_tt_m_x_400_m_y_100": np.float32,
+        "max_score_m_x_400_m_y_100": np.float32,
         "max_score_index_m_x_400_m_y_100": np.int32,
-        "score_sig_m_x_1000_m_y_300": np.float32,
-        "score_tt_m_x_1000_m_y_300": np.float32,
+        "max_score_m_x_1000_m_y_300": np.float32,
         "max_score_index_m_x_1000_m_y_300": np.int32,
     }
 
@@ -894,24 +927,19 @@ def test_produce_friend(tmp_path, write_tree, models, transformations):
         tree = f["ntuple"]
         assert tree.num_entries == len(events)
         assert tree.keys() == [
-            f"{c}_m_x_{m}"
-            for m in [400, 1000]
-            for c in SCORE_COLUMNS + ["max_score_index"]
+            f"{c}_m_x_{m}" for m in [400, 1000] for c in SCORE_COLUMNS
         ]
         arrays = tree.arrays(library="np")
 
-    names = [c.name for c in OUTPUT_CLASSES]
     for entry, event in enumerate(events):
-        preferred = FOLD_PREFERRED_CLASS[event % N_FOLDS]
+        max_score, max_score_index = _expected(event)
         for m in [400, 1000]:
-            np.testing.assert_allclose(
-                [arrays[f"{c}_m_x_{m}"][entry] for c in SCORE_COLUMNS],
-                _expected_scores(preferred),
-                rtol=1e-6,
+            assert arrays[f"max_score_m_x_{m}"].dtype == np.float32
+            assert arrays[f"max_score_index_m_x_{m}"].dtype == np.int32
+            assert arrays[f"max_score_m_x_{m}"][entry] == pytest.approx(
+                max_score, rel=1e-6
             )
-            assert arrays[f"max_score_index_m_x_{m}"][entry] == names.index(
-                preferred
-            )
+            assert arrays[f"max_score_index_m_x_{m}"][entry] == max_score_index
 
 
 def test_produce_friend_reads_inputs_from_friends(
@@ -946,4 +974,4 @@ def test_produce_friend_empty_main_file(
 
     with uproot.open(output_file) as f:
         assert f["ntuple"].num_entries == 0
-        assert len(f["ntuple"].keys()) == 2 * 4
+        assert len(f["ntuple"].keys()) == 2 * len(SCORE_COLUMNS)

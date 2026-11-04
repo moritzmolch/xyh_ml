@@ -127,24 +127,31 @@ def test_main_writes_friend_for_input_file(setup):
 
     produce.main(cfg)
 
-    classes = [c.name for c in cfg.outputs.classes]
+    n_classes = len(cfg.outputs.classes)
     with uproot.open(output_file) as f:
         tree = f["ntuple"]
         assert tree.num_entries == N_EVENTS
-        assert len(tree.keys()) == len(PARAMETER_VALUES) * (len(classes) + 1)
+        assert tree.keys() == [
+            f"{c}_{p}"
+            for p in ["m_x_400_m_y_100", "m_x_1000_m_y_300"]
+            for c in ["max_score", "max_score_index"]
+        ]
         arrays = tree.arrays(library="np")
 
     for p in ["m_x_400_m_y_100", "m_x_1000_m_y_300"]:
-        scores = np.stack([arrays[f"score_{c}_{p}"] for c in classes], axis=1)
-        np.testing.assert_allclose(scores.sum(axis=1), 1.0, rtol=1e-5)
-        np.testing.assert_array_equal(
-            arrays[f"max_score_index_{p}"], np.argmax(scores, axis=1)
-        )
+        max_score = arrays[f"max_score_{p}"]
+        max_score_index = arrays[f"max_score_index_{p}"]
+        assert max_score.dtype == np.float32
+        assert max_score_index.dtype == np.int32
+        # The maximum of a softmax over n classes is in [1/n, 1]
+        assert np.all(max_score >= 1.0 / n_classes - 1e-6)
+        assert np.all(max_score <= 1.0)
+        assert np.all((max_score_index >= 0) & (max_score_index < n_classes))
 
     # The two parameter value combinations give different scores
     assert not np.allclose(
-        arrays[f"score_{classes[0]}_m_x_400_m_y_100"],
-        arrays[f"score_{classes[0]}_m_x_1000_m_y_300"],
+        arrays["max_score_m_x_400_m_y_100"],
+        arrays["max_score_m_x_1000_m_y_300"],
     )
 
 
