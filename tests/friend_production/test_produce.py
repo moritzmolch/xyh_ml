@@ -530,8 +530,7 @@ def test_process_chunk(write_tree, models, transformations, parameter_values):
         batch_size=4,
     )
 
-    # One row per event with the loaded columns, the campaign and the
-    # flattened scores
+    # One row per event with only the flattened scores, in event order
     assert df.index.tolist() == [
         (0, 0, 0),
         (0, 0, 1),
@@ -539,13 +538,12 @@ def test_process_chunk(write_tree, models, transformations, parameter_values):
         (0, 1, 0),
         (0, 1, 1),
     ]
-    assert df.columns[:3].tolist() == ["event", "pt", "campaign"]
-    assert (df["campaign"] == "2024_nano_v15").all()
-    assert len(df.columns) == 3 + 3 * 4
-    for _, row in df.iterrows():
-        expected = _expected_scores(
-            FOLD_PREFERRED_CLASS[int(row["event"]) % N_FOLDS]
-        )
+    assert df.columns.tolist() == produce.score_branch_names(
+        parameter_values, OUTPUT_CLASSES
+    )
+    events = [10, 11, 12, 13, 14]
+    for event, (_, row) in zip(events, df.iterrows()):
+        expected = _expected_scores(FOLD_PREFERRED_CLASS[event % N_FOLDS])
         np.testing.assert_allclose(
             [row[f"{c}_m_x_2000"] for c in SCORE_COLUMNS],
             expected,
@@ -613,3 +611,138 @@ def test_load_fold_model_missing_artifacts(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         produce._load_fold_model(tmp_path, 3, 2, network)
+
+
+# ----------------------------------------------------------- output writing
+
+
+def test_score_branch_names():
+    parameter_values = pd.DataFrame({"m_x": [400, 1000], "m_y": [100, 300]})
+    classes = OUTPUT_CLASSES[:2]
+
+    names = produce.score_branch_names(parameter_values, classes)
+
+    assert names == [
+        "score_sig_m_x_400_m_y_100",
+        "score_tt_m_x_400_m_y_100",
+        "max_score_index_m_x_400_m_y_100",
+        "score_sig_m_x_1000_m_y_300",
+        "score_tt_m_x_1000_m_y_300",
+        "max_score_index_m_x_1000_m_y_300",
+    ]
+    assert produce.score_branch_types(names) == {
+        "score_sig_m_x_400_m_y_100": np.float32,
+        "score_tt_m_x_400_m_y_100": np.float32,
+        "max_score_index_m_x_400_m_y_100": np.int32,
+        "score_sig_m_x_1000_m_y_300": np.float32,
+        "score_tt_m_x_1000_m_y_300": np.float32,
+        "max_score_index_m_x_1000_m_y_300": np.int32,
+    }
+
+
+BRANCH_TYPES = {"score_a": np.float32, "max_score_index": np.int32}
+
+
+def _block(chunk, entries, offset=0.0):
+    entries = list(entries)
+    return pd.DataFrame(
+        {
+            "score_a": [offset + e / 10 for e in entries],
+            "max_score_index": [e % 3 for e in entries],
+            "extra": 0.0,
+        },
+        index=pd.MultiIndex.from_arrays(
+            [[chunk] * len(entries), [0] * len(entries), entries],
+            names=produce.INDEX_NAMES,
+        ),
+    )
+
+
+def test_write_friend_file(tmp_path):
+    output_file = tmp_path / "sub" / "dir" / "friend.root"
+
+    produce.write_friend_file(
+        output_file,
+        BRANCH_TYPES,
+        5,
+        iter([_block(0, range(3)), _block(1, range(3, 5))]),
+    )
+
+    assert output_file.exists()
+    assert list(tmp_path.glob("sub/dir/*")) == [output_file]
+    with uproot.open(output_file) as f:
+        tree = f["ntuple"]
+        assert tree.num_entries == 5
+        assert sorted(tree.keys()) == sorted(BRANCH_TYPES)
+        arrays = tree.arrays(library="np")
+    assert arrays["score_a"].dtype == np.float32
+    assert arrays["max_score_index"].dtype == np.int32
+    np.testing.assert_allclose(arrays["score_a"], [0.0, 0.1, 0.2, 0.3, 0.4])
+    np.testing.assert_array_equal(arrays["max_score_index"], [0, 1, 2, 0, 1])
+
+
+def test_write_friend_file_empty(tmp_path):
+    output_file = tmp_path / "friend.root"
+
+    produce.write_friend_file(output_file, BRANCH_TYPES, 0, [])
+
+    with uproot.open(output_file) as f:
+        assert f["ntuple"].num_entries == 0
+        assert sorted(f["ntuple"].keys()) == sorted(BRANCH_TYPES)
+
+
+def test_write_friend_file_overwrites(tmp_path):
+    output_file = tmp_path / "friend.root"
+    produce.write_friend_file(output_file, BRANCH_TYPES, 1, [_block(0, [0])])
+
+    produce.write_friend_file(
+        output_file, BRANCH_TYPES, 2, [_block(0, [0, 1])]
+    )
+
+    with uproot.open(output_file) as f:
+        assert f["ntuple"].num_entries == 2
+
+
+@pytest.mark.parametrize(
+    "blocks, num_entries, error, match",
+    [
+        # Gap between blocks
+        ([_block(0, [0, 1]), _block(1, [3])], 4, ValueError, "continue"),
+        # Not starting at entry 0
+        ([_block(0, [1, 2])], 3, ValueError, "continue"),
+        # Fewer entries than the main tree
+        ([_block(0, [0, 1])], 3, ValueError, "main tree has 3"),
+        # Branch missing
+        (
+            [_block(0, [0]).drop(columns="score_a")],
+            1,
+            KeyError,
+            "score_a",
+        ),
+    ],
+)
+def test_write_friend_file_invalid(
+    tmp_path, blocks, num_entries, error, match
+):
+    output_file = tmp_path / "friend.root"
+
+    with pytest.raises(error, match=match):
+        produce.write_friend_file(
+            output_file, BRANCH_TYPES, num_entries, blocks
+        )
+
+    # Neither the output file nor the temporary file is left behind
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_friend_file_failure_keeps_previous_output(tmp_path):
+    output_file = tmp_path / "friend.root"
+    produce.write_friend_file(output_file, BRANCH_TYPES, 1, [_block(0, [0])])
+
+    with pytest.raises(ValueError):
+        produce.write_friend_file(
+            output_file, BRANCH_TYPES, 2, [_block(0, [0])]
+        )
+
+    with uproot.open(output_file) as f:
+        assert f["ntuple"].num_entries == 1

@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -254,6 +255,34 @@ def _score_columns(output_classes: list[OutputClass]) -> list[str]:
     return [f"score_{output_class.name}" for output_class in output_classes]
 
 
+def score_branch_names(
+    parameter_values: pd.DataFrame,
+    output_classes: list[OutputClass],
+) -> list[str]:
+    """Names of the friend tree branches: for every parameter value
+    combination (outer loop) the scores and ``max_score_index`` (inner loop),
+    e.g. ``score_sig_m_x_400_m_y_100``."""
+    score_columns = _score_columns(output_classes) + ["max_score_index"]
+    parameter_value_strs = [
+        "_".join(f"{col}_{int(val)}" for col, val in row.items())
+        for row in parameter_values.to_dict(orient="records")
+    ]
+    return [
+        f"{score_column}_{parameter_value_str}"
+        for parameter_value_str in parameter_value_strs
+        for score_column in score_columns
+    ]
+
+
+def score_branch_types(branch_names: list[str]) -> dict[str, type]:
+    """Types of the friend tree branches: ``int32`` for ``max_score_index``
+    branches, ``float32`` for scores."""
+    return {
+        name: np.int32 if name.startswith("max_score_index") else np.float32
+        for name in branch_names
+    }
+
+
 def _process_fold(
     data_frame: pd.DataFrame,
     fold: int,
@@ -359,14 +388,7 @@ def _flatten_scores(
     )
 
     # Construct column names for the flattened scores
-    parameter_value_strs = [
-        "_".join(f"{col}_{int(val)}" for col, val in row.items())
-        for row in parameter_values.to_dict(orient="records")
-    ]
-    flat.columns = [
-        f"{score_column}_{parameter_value_strs[i]}"
-        for i, score_column in flat.columns
-    ]
+    flat.columns = score_branch_names(parameter_values, output_classes)
 
     return flat
 
@@ -387,8 +409,8 @@ def _process_chunk(
     batch_size: int,
 ) -> pd.DataFrame:
     """Load a chunk, evaluate the fold models for all parameter values and
-    return one row per event with the loaded columns, ``campaign`` and the
-    flattened scores (see :func:`_flatten_scores`)."""
+    return the flattened scores (see :func:`_flatten_scores`) with one row
+    per event, in the order of the events in the chunk."""
     # Create eras lookup table
     eras_lookup = {c.era: c for c in campaigns}
 
@@ -424,12 +446,8 @@ def _process_chunk(
     data_frame_eval = pd.concat(fold_data_frames)
     scores = _flatten_scores(data_frame_eval, parameter_values, output_classes)
 
-    # Add the scores in one step instead of column by column, which would
-    # fragment the data frame
-    return pd.concat(
-        [chunk_data_frame, scores.reindex(chunk_data_frame.index)],
-        axis=1,
-    )
+    # Return the scores in the order of the events of the chunk
+    return scores.reindex(chunk_data_frame.index)
 
 
 def _fold_training_dirs(cfg: DictConfig) -> dict[int, Path]:
@@ -482,6 +500,74 @@ def _load_fold_model(
     logger.info(f"Loaded model and transformations from {training_dir}")
 
     return model, transformations
+
+
+def write_friend_file(
+    output_file: Path,
+    branch_types: dict[str, type],
+    num_entries: int,
+    data_frames: Iterable[pd.DataFrame],
+    tree: str = "ntuple",
+) -> None:
+    """Write a friend tree with ``num_entries`` entries to ``output_file``.
+
+    ``data_frames`` yields the branch values in consecutive blocks of rows.
+    Their ``entry`` index level must continue the entries written so far, so
+    that the friend tree is aligned entry by entry with the main tree. The
+    file is written to a temporary file first and only moved to
+    ``output_file`` if all entries were written, so that no incomplete
+    friend file is left behind.
+    """
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = output_file.with_name(output_file.name + ".tmp")
+
+    try:
+        with uproot.recreate(tmp_file) as f:
+            f.mktree(tree, branch_types)
+            n_written = 0
+            for df in data_frames:
+                entries = df.index.get_level_values("entry").to_numpy()
+                expected = np.arange(n_written, n_written + len(df))
+                if not np.array_equal(entries, expected):
+                    msg = (
+                        f"Entries {entries[:1]}...{entries[-1:]} do not "
+                        + f"continue the {n_written} entries written to "
+                        + f"{output_file}."
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
+
+                missing = set(branch_types) - set(df.columns)
+                if missing:
+                    msg = f"Branches {sorted(missing)} missing in data frame."
+                    logger.error(msg)
+                    raise KeyError(msg)
+
+                if len(df):
+                    f[tree].extend(
+                        {
+                            name: df[name].to_numpy(dtype=dtype)
+                            for name, dtype in branch_types.items()
+                        }
+                    )
+                n_written += len(df)
+
+        if n_written != num_entries:
+            msg = (
+                f"Wrote {n_written} entries to {output_file}, but the main "
+                + f"tree has {num_entries} entries."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        tmp_file.replace(output_file)
+    finally:
+        tmp_file.unlink(missing_ok=True)
+
+    logger.info(
+        f"Wrote friend tree '{tree}' with {n_written} entries and "
+        + f"{len(branch_types)} branches to {output_file}"
+    )
 
 
 @hydra.main(
