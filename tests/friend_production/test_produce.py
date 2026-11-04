@@ -6,6 +6,7 @@ import uproot
 
 from xyh_ml.cli.friends import produce
 from xyh_ml.friend_production.dataclasses import (
+    Chunk,
     FileSlice,
     Sample,
 )
@@ -183,3 +184,90 @@ def test_read_tree_slice_missing_tree(write_tree):
 
     with pytest.raises(KeyError, match="does not contain"):
         produce._read_tree_slice(path, ["pt"], file_slice)
+
+
+# ----------------------------------------------------------- load_data_frame
+
+
+@pytest.fixture
+def main_and_friend(write_tree):
+    """Two main files (3 and 4 entries) with one friend each."""
+    main = [
+        _filled(write_tree, "a.root", 3, offset=0.0),
+        _filled(write_tree, "b.root", 4, offset=100.0),
+    ]
+    friends = [
+        write_tree(
+            "fa.root", {"score": 0.5 * np.arange(3), "pt": -np.ones(3)}
+        ),
+        write_tree(
+            "fb.root", {"score": 50 + 0.5 * np.arange(4), "pt": -np.ones(4)}
+        ),
+    ]
+    return _sample(main, {"nn": friends})
+
+
+def test_load_data_frame_joins_friend_columns(main_and_friend):
+    (chunk,) = produce.determine_chunks(main_and_friend, chunk_size=100)
+
+    df = produce.load_data_frame(chunk, ["score", "pt"])
+
+    # Friends add columns, not rows; requested order is kept
+    assert df.columns.tolist() == ["score", "pt"]
+    assert len(df) == 7
+    assert df["score"].tolist() == [0.0, 0.5, 1.0, 50.0, 50.5, 51.0, 51.5]
+    # Columns present in main and friend are taken from the main file
+    assert df["pt"].tolist() == [0.0, 1.0, 2.0, 100.0, 101.0, 102.0, 103.0]
+
+
+def test_load_data_frame_index_is_unique_across_files(main_and_friend):
+    (chunk,) = produce.determine_chunks(main_and_friend, chunk_size=100)
+
+    df = produce.load_data_frame(chunk, ["pt"])
+
+    # Entry numbers restart in every main file, so the slice index is needed
+    # to identify events uniquely
+    assert df.index.names == ["chunk", "slice", "entry"]
+    assert df.index.tolist() == [
+        (0, 0, 0),
+        (0, 0, 1),
+        (0, 0, 2),
+        (0, 1, 0),
+        (0, 1, 1),
+        (0, 1, 2),
+        (0, 1, 3),
+    ]
+    assert df.index.is_unique
+
+
+def test_load_data_frame_partial_slices(main_and_friend):
+    chunks = produce.determine_chunks(main_and_friend, chunk_size=2)
+
+    df = produce.load_data_frame(chunks[1], ["event", "score"])
+
+    assert df.index.tolist() == [(1, 0, 2), (1, 1, 0)]
+    assert df["event"].tolist() == [2.0, 0.0]
+    assert df["score"].tolist() == [1.0, 50.0]
+
+
+def test_load_data_frame_duplicate_columns_requested(main_and_friend):
+    (chunk,) = produce.determine_chunks(main_and_friend, chunk_size=100)
+
+    df = produce.load_data_frame(chunk, ["pt", "score", "pt"])
+
+    assert df.columns.tolist() == ["pt", "score"]
+
+
+def test_load_data_frame_unknown_column(main_and_friend):
+    (chunk,) = produce.determine_chunks(main_and_friend, chunk_size=100)
+
+    with pytest.raises(KeyError, match="nope"):
+        produce.load_data_frame(chunk, ["pt", "nope"])
+
+
+def test_load_data_frame_empty_chunk():
+    df = produce.load_data_frame(Chunk(index=0, slices=[]), ["pt", "score"])
+
+    assert df.empty
+    assert df.columns.tolist() == ["pt", "score"]
+    assert df.index.names == ["chunk", "slice", "entry"]

@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 # Name of the event column
 EVENT_COLUMN_NAME = "event"
 
+# Index levels of the data frames returned by load_data_frame
+INDEX_NAMES = ["chunk", "slice", "entry"]
+
 
 def _get_num_entries(file: str, tree: str = "ntuple") -> int:
     """Return the number of entries of ``tree`` in ``file``, or 0 if the tree
@@ -185,14 +188,15 @@ def load_data_frame(
     entries in the range ``[entry_start, entry_stop)`` are included. Each
     column is taken from the first tree that holds it (main file first, then
     the friends in order). The slices are then concatenated into a single
-    data frame with the additional columns ``chunk`` (chunk index) and
-    ``entry`` (entry number in the main file).
+    data frame with the index levels ``chunk`` (chunk index), ``slice``
+    (index of the slice in ``chunk.slices``) and ``entry`` (entry number in
+    the main file of the slice).
     """
 
     # Add data frame for each slice of the chunk to a list, then concatenate them
     data_frames = []
 
-    for slice in chunk.slices:
+    for slice_index, slice in enumerate(chunk.slices):
         # Read each requested column from the first tree that contains it
         remaining = list(dict.fromkeys(columns))
         frames = []
@@ -211,17 +215,27 @@ def load_data_frame(
 
         # Join main and friend columns and restore the requested order
         df = pd.concat(frames, axis=1)[list(dict.fromkeys(columns))]
+
+        # Entry numbers restart in every main file, so the slice index is
+        # part of the index to identify events within a chunk uniquely
+        n = df.shape[0]
         df.index = pd.MultiIndex.from_arrays(
-            np.ones(shape=(df.shape[0],), dtype=int) * chunk.index,
-            np.arange(slice.entry_start, slice.entry_stop),
-            names=["chunk", "entry"],
+            [
+                np.full(n, chunk.index),
+                np.full(n, slice_index),
+                np.arange(slice.entry_start, slice.entry_stop),
+            ],
+            names=INDEX_NAMES,
         )
 
         data_frames.append(df)
 
     if not data_frames:
         return pd.DataFrame(
-            columns=[*dict.fromkeys(columns), "chunk", "entry"]
+            columns=list(dict.fromkeys(columns)),
+            index=pd.MultiIndex.from_arrays(
+                [[]] * len(INDEX_NAMES), names=INDEX_NAMES
+            ),
         )
 
     return pd.concat(data_frames)
