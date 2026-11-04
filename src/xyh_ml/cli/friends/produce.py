@@ -330,16 +330,13 @@ def _process_fold(
         fold_transformations,
     )
 
-    # Evaluate the model. The dataset is already in memory, so no data loader
-    # worker processes are used; forking them from the multi-threaded process
-    # for every fold and chunk is slow and can deadlock.
+    # Evaluate the model
     profiler = profiler if profiler is not None else Profiler()
     with profiler.measure("predict"):
         predictions = predict(
             fold_model,
             fold_dataset,
             device=_device(),
-            data_loader_num_workers=0,
             batch_size=batch_size,
         )
 

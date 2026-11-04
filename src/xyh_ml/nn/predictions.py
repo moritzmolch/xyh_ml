@@ -1,10 +1,11 @@
 import logging
 from time import time
 
+import numpy as np
 import torch
 from torch.nn import Module
 from torch.nn.functional import softmax
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import TensorDataset
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -14,10 +15,8 @@ def predict(
     model: Module,
     dataset: TensorDataset,
     device: str,
-    data_loader_num_workers: int = 1,
-    data_loader_pin_memory: bool = False,
     batch_size: int = 65536,
-):
+) -> np.ndarray:
     """
     Predict output of a trained model for a `TensorDataset`.
 
@@ -29,6 +28,11 @@ def predict(
     The function returns a numpy array with shape `(n_events, n_classes)`,
     where columns contain the softmax-normalized output of the model for each
     class.
+
+    The tensors of the dataset are evaluated in consecutive slices of
+    `batch_size` events. A `DataLoader` is not used, as it fetches and
+    collates every event individually, which took far longer than the model
+    evaluation itself.
 
     Parameters
     ----------
@@ -42,12 +46,6 @@ def predict(
     device : str
         Device to use for predictions. Can be either `cpu` or `cuda`.
 
-    data_loader_num_workers : int, optional
-        Number of workers to use for the data loader. (default: `1`)
-
-    data_loader_pin_memory : bool, optional
-        Whether to pin memory for the data loader. (default: `False`)
-
     batch_size : int, optional
         Batch size to use for predictions. (default: `65536`)
 
@@ -57,46 +55,38 @@ def predict(
         Array with shape `(n_events, n_classes)` containing the predicted
         class probabilities for each event in the dataset.
     """
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}.")
 
-    # Create the data loader for predictions
-    data_loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=data_loader_num_workers,
-        pin_memory=data_loader_pin_memory,
-    )
-
-    # Move the model to the training device and turn on evaluation mode
+    # Move the model to the evaluation device and turn on evaluation mode
     model = model.eval().to(device)
 
     # Start time tracking
     start = time()
 
+    # Evaluate the model in slices of the dataset tensors. At least one
+    # (possibly empty) slice is evaluated, so that the output has the correct
+    # number of columns also for empty datasets.
+    x, p = dataset.tensors
+    n_events = len(x)
     pred = []
-    for x, p in data_loader:
-        # Move tensors to training device
-        x = x.to(device)
-        p = p.to(device)
+    with torch.no_grad():
+        for i in range(0, max(n_events, 1), batch_size):
+            # Concatenate inputs and parameters and move them to the device
+            xp = torch.cat(
+                (x[i : i + batch_size], p[i : i + batch_size]), dim=-1
+            ).to(device)
 
-        # Get the network prediction and append it to the list of prediction
-        # tensors. Directly calculate normalized softmax scores
-        with torch.no_grad():
-            pred.append(
-                softmax(
-                    model(torch.cat((x, p), dim=-1)),
-                    dim=-1,
-                )
-            )
+            # Directly calculate normalized softmax scores
+            pred.append(softmax(model(xp), dim=-1))
 
-    # Concatenate predictions, targets, and weights and convert to numpy arrays
+    # Concatenate predictions and convert to a numpy array
     pred = torch.cat(pred, dim=0).cpu().numpy()
 
     # Stop time tracking
     stop = time()
 
     # Log number of events and time spent for evaluation
-    n_events = len(pred)
     delta = round(stop - start, 2)
     logger.debug(
         f"Evaluated model predictions for {n_events} events in {delta} s"
