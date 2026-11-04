@@ -443,7 +443,13 @@ def main(cfg: Config):
     output_variable = cfg.outputs.variables[0]
     output_classes = cfg.outputs.classes
     parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
-    columns = [EVENT_COLUMN_NAME] + [v.name for v in cfg.inputs.variables]
+    # Only variables that are part of the ntuples can be read from the files;
+    # the others (e.g. campaign) are added during processing
+    columns = [EVENT_COLUMN_NAME] + [
+        v.name
+        for v in cfg.inputs.variables
+        if v.get("is_part_of_snapshot", True)
+    ]
 
     # Load campaigns and create lookup table for campaign and channel names
     campaigns = cfg.campaigns
@@ -495,11 +501,24 @@ def main(cfg: Config):
         models[fold] = model
 
     # Get sample metadata
-    samples = [Sample(**s) for s in load_json(metadata_file)]
-    sample = next(samples)
+    # The models are trained per channel, so only process samples of the
+    # channel of the loaded models
+    samples = [
+        sample
+        for sample in (Sample(**s) for s in load_json(metadata_file))
+        if sample.channel == cfg.mode.channel
+    ]
+    if not samples:
+        msg = (
+            f"No samples of channel {cfg.mode.channel} found in "
+            + f"{metadata_file}."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+    sample = samples[0]
 
     # Determine chunks for the first sample and log their sizes
-    chunks = determine_chunks(samples[0], chunk_size=10_000)
+    chunks = determine_chunks(sample, chunk_size=10_000)
     for chunk in chunks:
         _process_chunk(
             chunk,
