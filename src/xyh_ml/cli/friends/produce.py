@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 import uproot
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.config.dataclasses import (
@@ -672,27 +672,27 @@ def _single_file_sample(sample: Sample, i: int) -> Sample:
 def select_sample_files(
     samples: list[Sample],
     sample_name: str,
-    era: str | None = None,
-    channel: str | None = None,
+    eras: list[str] | None = None,
+    channels: list[str] | None = None,
 ) -> list[Sample]:
     """Return one single-file sample (see :func:`select_input_file`) for
     every main file of the sample ``sample_name``.
 
     The sample usually exists for several eras and channels in the metadata;
-    all of them are included unless ``era`` or ``channel`` restrict them.
+    all of them are included unless ``eras`` or ``channels`` restrict them.
     """
     selected = [
         s
         for s in samples
         if s.sample == sample_name
-        and (era is None or s.era == era)
-        and (channel is None or s.channel == channel)
+        and (eras is None or s.era in eras)
+        and (channels is None or s.channel in channels)
     ]
     if not selected:
         available = sorted({s.sample for s in samples})
         msg = (
-            f"Sample {sample_name} (era {era}, channel {channel}) not found "
-            + f"in the sample metadata. Available samples: {available}"
+            f"Sample {sample_name} (eras {eras}, channels {channels}) not "
+            + f"found in the sample metadata. Available samples: {available}"
         )
         logger.error(msg)
         raise ValueError(msg)
@@ -721,6 +721,29 @@ def campaign_name(campaigns: list[Campaign], era: str) -> str:
     msg = f"No campaign defined for era {era}."
     logger.error(msg)
     raise ValueError(msg)
+
+
+def campaign_eras(campaigns: list[Campaign], names: list[str]) -> list[str]:
+    """Eras of the campaigns ``names``."""
+    eras = {campaign.name: campaign.era for campaign in campaigns}
+    unknown = [name for name in names if name not in eras]
+    if unknown:
+        msg = (
+            f"Unknown campaigns {unknown}. Defined campaigns: "
+            + f"{list(eras)}"
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+    return [eras[name] for name in names]
+
+
+def _as_list(value: str | ListConfig | None) -> list[str] | None:
+    """``None``, or the single value or list of values as a list."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value]
 
 
 def produce_friend(
@@ -844,7 +867,17 @@ def _select_jobs(
         logger.error(msg)
         raise ValueError(msg)
 
+    campaigns = _as_list(cfg.campaign)
+    channels = _as_list(cfg.channel)
+
     if cfg.input_file is not None:
+        if campaigns is not None or channels is not None:
+            msg = (
+                "campaign and channel can not be set together with "
+                + "input_file; they are taken from the input file."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
         file_samples = [select_input_file(samples, cfg.input_file)]
     else:
         if cfg.output_file:
@@ -855,7 +888,12 @@ def _select_jobs(
             logger.error(msg)
             raise ValueError(msg)
         file_samples = select_sample_files(
-            samples, cfg.sample, era=cfg.era, channel=cfg.channel
+            samples,
+            cfg.sample,
+            eras=None
+            if campaigns is None
+            else campaign_eras(cfg.campaigns, campaigns),
+            channels=channels,
         )
 
     return [

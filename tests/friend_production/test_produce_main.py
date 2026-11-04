@@ -271,7 +271,7 @@ def test_produce_config_defaults():
 
     assert cfg.input_file is None
     assert cfg.sample is None
-    assert cfg.era is None
+    assert cfg.campaign is None
     assert cfg.channel is None
     assert cfg.skip_existing is False
     assert cfg.output_file is None
@@ -332,7 +332,14 @@ def test_main_sample_uses_models_of_the_file_channel(setup, tmp_path):
     "selection, expected",
     [
         ({"channel": "mt"}, ["mt/f_0.root"]),
-        ({"era": "2024", "channel": "et"}, ["et/f_0.root", "et/f_1.root"]),
+        (
+            {"campaign": "2024_nano_v15", "channel": "et"},
+            ["et/f_0.root", "et/f_1.root"],
+        ),
+        (
+            {"campaign": ["2024_nano_v15"], "channel": ["et", "mt"]},
+            ["et/f_0.root", "et/f_1.root", "mt/f_0.root"],
+        ),
     ],
 )
 def test_main_sample_restricted(setup, tmp_path, selection, expected):
@@ -409,6 +416,60 @@ def test_main_sample_continues_after_failure(setup, tmp_path):
         len(_friend_arrays(friends / "f_1.root")["max_score_m_x_400_m_y_100"])
         == 4
     )
+
+
+def test_produce_config_campaign_and_channel_from_command_line():
+    with initialize_config_dir(
+        str(PROJECT_DIR / "config"), version_base="1.3"
+    ):
+        single = compose(
+            "produce", overrides=["campaign=2024_nano_v15", "channel=mt"]
+        )
+        several = compose(
+            "produce",
+            overrides=[
+                "campaign=[2022_pre_ee_nano_v12,2024_nano_v15]",
+                "channel=[et,tt]",
+            ],
+        )
+
+    assert produce._as_list(single.campaign) == ["2024_nano_v15"]
+    assert produce._as_list(single.channel) == ["mt"]
+    assert produce.campaign_eras(
+        single.campaigns, produce._as_list(several.campaign)
+    ) == ["2022preEE", "2024"]
+    assert produce._as_list(several.channel) == ["et", "tt"]
+
+
+def test_main_sample_campaign_not_in_metadata(setup, tmp_path):
+    cfg = _sample_mode(
+        setup[0], tmp_path, sample="DY", campaign="2025_nano_v15"
+    )
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="Sample DY .* not found"):
+        produce.main(cfg)
+
+
+def test_main_sample_unknown_campaign(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY", campaign="2024")
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="Unknown campaigns"):
+        produce.main(cfg)
+
+
+@pytest.mark.parametrize(
+    "selection", [{"campaign": "2024_nano_v15"}, {"channel": "et"}]
+)
+def test_main_input_file_with_campaign_or_channel(setup, selection):
+    cfg, _ = setup
+    for key, value in selection.items():
+        cfg[key] = value
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="can not be set together"):
+        produce.main(cfg)
 
 
 def test_main_sample_not_found(setup, tmp_path):

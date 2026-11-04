@@ -26,14 +26,17 @@ metadata_file: data/output/friends/${ntuple.tag}/metadata/metadata.json.gz
 # a trailing part of it that matches exactly one main file.
 #
 # `sample`: name of a sample in the metadata file; all its main files are
-# processed, for all eras and channels unless restricted by `era` and
-# `channel`.
+# processed, for all campaigns and channels unless restricted by `campaign`
+# and `channel`. Both take a single value or a list, e.g.
+# `campaign=2022_pre_ee_nano_v12` or `channel=[et,mt]`; campaigns are the
+# names in `campaigns` (config/base/campaigns.yaml). Not possible together
+# with `input_file`, which determines both.
 #
 # The analysis channel is taken from the sample of each file (`mode.channel`
 # is not used), so that the models trained for this channel are loaded.
 input_file: null
 sample: null
-era: null
+campaign: null
 channel: null
 
 # Skip input files whose friend file exists already (friend files are only

@@ -892,16 +892,18 @@ def test_select_sample_files_all_eras_and_channels():
 
 
 @pytest.mark.parametrize(
-    "era, channel, expected",
+    "eras, channels, expected",
     [
-        ("2025", None, [("2025", "et"), ("2025", "mt")]),
-        (None, "mt", [("2024", "mt"), ("2025", "mt")]),
-        ("2024", "et", [("2024", "et")]),
+        (["2025"], None, [("2025", "et"), ("2025", "mt")]),
+        (None, ["mt"], [("2024", "mt"), ("2025", "mt")]),
+        (["2024"], ["et"], [("2024", "et")]),
+        (["2024", "2025"], ["et"], [("2024", "et"), ("2025", "et")]),
+        (["2025"], ["et", "mt"], [("2025", "et"), ("2025", "mt")]),
     ],
 )
-def test_select_sample_files_restricted(era, channel, expected):
+def test_select_sample_files_restricted(eras, channels, expected):
     files = produce.select_sample_files(
-        _metadata_samples(), "DY", era=era, channel=channel
+        _metadata_samples(), "DY", eras=eras, channels=channels
     )
 
     assert sorted({(s.era, s.channel) for s in files}) == expected
@@ -914,7 +916,44 @@ def test_select_sample_files_not_found():
     ):
         produce.select_sample_files(_metadata_samples(), "WJets")
     with pytest.raises(ValueError, match="not found"):
-        produce.select_sample_files(_metadata_samples(), "DY", era="2023")
+        produce.select_sample_files(_metadata_samples(), "DY", eras=["2023"])
+    with pytest.raises(ValueError, match="not found"):
+        produce.select_sample_files(_metadata_samples(), "DY", channels=["tt"])
+
+
+CAMPAIGNS = [
+    Campaign(name="2024_nano_v15", era="2024"),
+    Campaign(name="2025_nano_v15", era="2025"),
+]
+
+
+def test_campaign_eras():
+    assert produce.campaign_eras(CAMPAIGNS, ["2025_nano_v15"]) == ["2025"]
+    assert produce.campaign_eras(
+        CAMPAIGNS, ["2025_nano_v15", "2024_nano_v15"]
+    ) == ["2025", "2024"]
+    assert produce.campaign_eras(CAMPAIGNS, []) == []
+
+
+def test_campaign_eras_unknown():
+    with pytest.raises(
+        ValueError, match="Unknown campaigns \\['2024'\\]. Defined"
+    ):
+        produce.campaign_eras(CAMPAIGNS, ["2024_nano_v15", "2024"])
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, None),
+        ("et", ["et"]),
+        (["et", "mt"], ["et", "mt"]),
+        (OmegaConf.create({"x": ["et"]}).x, ["et"]),
+        (OmegaConf.create({"x": [2024]}).x, ["2024"]),
+    ],
+)
+def test_as_list(value, expected):
+    assert produce._as_list(value) == expected
 
 
 def test_default_output_file():
