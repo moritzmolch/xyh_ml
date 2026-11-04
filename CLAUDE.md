@@ -25,7 +25,7 @@ Machine learning for the X → YH → bbττ analysis (KIT, CMS). The package `x
 **Pipeline** (each stage is a script in `src/xyh_ml/cli/`, paired with a top-level YAML in `config/`):
 1. `preprocess_snapshots` (`config/preprocess_snapshots.yaml`) — reads ROOT snapshots (per campaign/channel from `data_source`), writes HDF5 data frames under `artifacts.data_frame_dir`.
 2. `train_classifier` (`config/train_classifier.yaml`) — trains a parametrized MLP (`cli/model.py`, `MultiLayerPerceptron`) separately per `decay_mode`, held-out `fold` (k-fold split on `event % mode.n_folds`; the held-out fold is used for evaluation) and analysis `channel` (et/mt/tt). Outputs go to `artifacts.training_dir`.
-3. `evaluate_categorization` / `plot_classification_performance` — categorization over the evaluation fold (predictions in `predictions_dir`) and plots. `cli/evaluate_classifier.py` is obsolete; ignore it.
+3. `evaluate_test_sample` / `plot_efficiencies` / `plot_output_class_fractions` — categorization over the evaluation fold (predictions in `predictions_dir`) and plots. Shared plot helpers (labels, loading/merging of predictions) live in `xyh_ml/plotting.py`.
 
 **Workflow** (run from the repo root; repeat per `mode.decay_mode` ∈ {`y2b_h2tau`, `y2tau_h2b`, also select `inputs=<same>`} per `mode.fold` ∈ {0, …, `mode.n_folds`-1} and per `mode.channel` ∈ {et, mt, tt}; `tags.snapshot_tag` / `tags.training_tag` default to `config/base/tags.yaml`):
 ```bash
@@ -35,12 +35,15 @@ python -m xyh_ml.cli.preprocess_snapshots $M
 # 2. Train on all folds except the held-out fold f; writes config/transformations.pkl/metrics.json/checkpoints.pt to training_dir
 python -m xyh_ml.cli.train_classifier $M mode.fold=0
 # 3. Categorization on the *held-out* fold (reads training_dir artifacts): subsample (10k/category) and write predictions_<decay_mode>.h5 with score_<class> columns
-python -m xyh_ml.cli.evaluate_categorization $M mode.fold=0
-# 4. Efficiency plots (pdf/png) from the h5 of 3 -> data/output/<training_tag>/plots/
-python -m xyh_ml.cli.plot_classification_performance $M mode.fold=0
+python -m xyh_ml.cli.evaluate_test_sample $M mode.fold=0
+# 4. Efficiency and output class fraction plots (pdf/png) from the h5 of 3 -> data/output/<training_tag>/plots/
+python -m xyh_ml.cli.plot_efficiencies $M mode.fold=0
+python -m xyh_ml.cli.plot_output_class_fractions $M mode.fold=0
+# 4b. Same plots with the predictions of all folds merged (needs step 3 for every fold; file suffix allfoldsof<n_folds>)
+python -m xyh_ml.cli.plot_efficiencies $M plotting.merge_folds=true
 ```
 
-Each step consumes the previous step's files, so run in order. `plot_classification_performance` reads the predictions file of the selected tag/mode/fold/channel from `predictions_dir`, so run it per channel with the same overrides.
+Each step consumes the previous step's files, so run in order. The plot scripts read the predictions file of the selected tag/mode/fold/channel from `predictions_dir` (with `plotting.merge_folds=true`: of all folds, each event scored by the model not trained on it, `reduction_rate` multiplied by `n_folds`), so run them per channel with the same overrides.
 
 **Configuration** is Hydra composition: top-level `config/*.yaml` lists defaults from `config/base/*.yaml` (mode, tags, artifacts, outputs, data_source, dataset, network, training) plus `config/inputs/<decay_mode>.yaml` (input variables, parameters, output classes, with per-variable `transformation` and `fallback_value`). Typed dataclasses mirroring this structure live in `src/xyh_ml/config/dataclasses.py` (`Config`, `Variable`, `OutputClass`, `Network`, `Training`, ...); `config/util.py` converts the Hydra config into them. When adding a config field, change the YAML and the dataclass together. Hydra runs write to `output/hydra/<job>/<timestamp>` and do not `chdir`; `PROJECT_DIR` (`xyh_ml/__init__.py`) is the repo root used to locate `config/`.
 
