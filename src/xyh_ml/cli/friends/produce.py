@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 from collections.abc import Iterable
 from pathlib import Path
@@ -396,12 +397,11 @@ def _flatten_scores(
 def _process_chunk(
     chunk: Chunk,
     columns: list[str],
-    sample: Sample,
+    campaign_name: str,
     input_variables: list[Variable],
     input_parameters: list[Variable],
     output_variable: Variable,
     output_classes: list[OutputClass],
-    campaigns: list[Campaign],
     parameter_values: pd.DataFrame,
     models: dict[int, torch.nn.Module],
     transformations: dict[int, dict[str, dict[str, Any]]],
@@ -411,13 +411,10 @@ def _process_chunk(
     """Load a chunk, evaluate the fold models for all parameter values and
     return the flattened scores (see :func:`_flatten_scores`) with one row
     per event, in the order of the events in the chunk."""
-    # Create eras lookup table
-    eras_lookup = {c.era: c for c in campaigns}
-
     # Load the data frame for the chunk and add the campaign column
     logger.info(f"Chunk {chunk.index} has {chunk.num_entries} entries.")
     chunk_data_frame = load_data_frame(chunk, columns=columns)
-    chunk_data_frame["campaign"] = eras_lookup[sample.era].name
+    chunk_data_frame["campaign"] = campaign_name
 
     # Prepare data frames for evaluation of multiple input parameter values
     data_frame = prepare_with_parameter_values(
@@ -570,20 +567,161 @@ def write_friend_file(
     )
 
 
+def select_input_file(
+    samples: list[Sample],
+    input_file: str,
+    channel: str,
+) -> Sample:
+    """Find ``input_file`` among the main files of ``samples`` and return a
+    sample that only holds this main file and its friend files.
+
+    ``input_file`` is either the full path of a main file as stored in the
+    metadata or a trailing part of it (e.g. the path without the XRootD
+    server) that matches exactly one main file. The sample of the file must
+    belong to the analysis ``channel``, as the models are trained per
+    channel.
+    """
+    exact = [
+        (sample, i)
+        for sample in samples
+        for i, main_file in enumerate(sample.main_files)
+        if main_file == input_file
+    ]
+    suffix = "/" + input_file.lstrip("/")
+    matches = exact or [
+        (sample, i)
+        for sample in samples
+        for i, main_file in enumerate(sample.main_files)
+        if main_file.endswith(suffix)
+    ]
+
+    if not matches:
+        msg = f"Input file {input_file} not found in the sample metadata."
+        logger.error(msg)
+        raise ValueError(msg)
+    if len(matches) > 1:
+        msg = (
+            f"Input file {input_file} matches several main files: "
+            + f"{[s.main_files[i] for s, i in matches]}."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    sample, i = matches[0]
+    if sample.channel != channel:
+        msg = (
+            f"Input file {input_file} belongs to channel {sample.channel}, "
+            + f"but the friend production runs for channel {channel}."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    return dataclasses.replace(
+        sample,
+        main_files=[sample.main_files[i]],
+        friend_files={
+            name: [friend_file_list[i]]
+            for name, friend_file_list in sample.friend_files.items()
+        },
+    )
+
+
+def default_output_file(output_dir: Path, sample: Sample) -> Path:
+    """Output path mirroring the CROWN friend layout,
+    ``<output_dir>/<era>/<sample>/<channel>/<file name of the main file>``.
+    """
+    (main_file,) = sample.main_files
+    file_name = main_file.rsplit("/", 1)[-1]
+    return output_dir / sample.era / sample.sample / sample.channel / file_name
+
+
+def campaign_name(campaigns: list[Campaign], era: str) -> str:
+    """Name of the campaign of ``era``, as used for the ``campaign`` input."""
+    for campaign in campaigns:
+        if campaign.era == era:
+            return campaign.name
+    msg = f"No campaign defined for era {era}."
+    logger.error(msg)
+    raise ValueError(msg)
+
+
+def produce_friend(
+    sample: Sample,
+    output_file: Path,
+    columns: list[str],
+    campaign_name: str,
+    input_variables: list[Variable],
+    input_parameters: list[Variable],
+    output_variable: Variable,
+    output_classes: list[OutputClass],
+    parameter_values: pd.DataFrame,
+    models: dict[int, torch.nn.Module],
+    transformations: dict[int, dict[str, dict[str, Any]]],
+    n_folds: int,
+    batch_size: int,
+    chunk_size: int,
+) -> None:
+    """Evaluate the models for all events of the single main file of
+    ``sample`` and write the scores to the friend file ``output_file``.
+
+    The friend tree has one entry per entry of the main tree. For main files
+    without entries (or without ``ntuple`` tree), an empty friend tree with
+    all branches is written.
+    """
+    (main_file,) = sample.main_files
+    num_entries = _get_num_entries(main_file)
+    chunks = determine_chunks(sample, chunk_size=chunk_size)
+    logger.info(
+        f"Producing friend for {main_file} ({num_entries} entries, "
+        + f"{len(chunks)} chunk(s)) to {output_file}"
+    )
+
+    branch_names = score_branch_names(parameter_values, output_classes)
+
+    # Evaluate the chunks lazily while writing to keep the memory usage
+    # limited to one chunk
+    scores = (
+        _process_chunk(
+            chunk,
+            columns,
+            campaign_name,
+            input_variables,
+            input_parameters,
+            output_variable,
+            output_classes,
+            parameter_values,
+            models,
+            transformations,
+            n_folds,
+            batch_size,
+        )
+        for chunk in chunks
+    )
+    write_friend_file(
+        output_file,
+        score_branch_types(branch_names),
+        num_entries,
+        scores,
+    )
+
+
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
     config_name="produce",
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Get sample metadata
-    metadata_file = Path(cfg.metadata_file)
+    # Find the input file in the sample metadata and check that it belongs to
+    # the channel the friend is produced for. Done first to fail early.
+    samples = [Sample.from_dict(s) for s in load_json(Path(cfg.metadata_file))]
+    sample = select_input_file(samples, cfg.input_file, cfg.mode.channel)
 
-    # Define the neural network inputs and parameters and get the columns
-    inputs = cfg.inputs
-    output_variable = cfg.outputs.variables[0]
-    output_classes = cfg.outputs.classes
-    parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
+    # Output file, by default following the CROWN friend directory layout
+    if cfg.output_file:
+        output_file = Path(cfg.output_file)
+    else:
+        output_file = default_output_file(Path(cfg.output_dir), sample)
+
     # Only variables that are part of the ntuples can be read from the files;
     # the others (e.g. campaign) are added during processing
     columns = [EVENT_COLUMN_NAME] + [
@@ -591,12 +729,6 @@ def main(cfg: Config):
         for v in cfg.inputs.variables
         if v.get("is_part_of_snapshot", True)
     ]
-
-    # Load campaigns and create lookup table for campaign and channel names
-    campaigns = cfg.campaigns
-
-    # Number of folds to split the data into for cross-validation
-    n_folds = cfg.mode.n_folds
 
     # Get the models and transformations for all folds
     models = {}
@@ -609,41 +741,22 @@ def main(cfg: Config):
             cfg.network,
         )
 
-    # Get sample metadata
-    # The models are trained per channel, so only process samples of the
-    # channel of the loaded models
-    samples = [
-        sample
-        for sample in (Sample(**s) for s in load_json(metadata_file))
-        if sample.channel == cfg.mode.channel
-    ]
-    if not samples:
-        msg = (
-            f"No samples of channel {cfg.mode.channel} found in "
-            + f"{metadata_file}."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-    sample = samples[0]
-
-    # Determine chunks for the first sample and log their sizes
-    chunks = determine_chunks(sample, chunk_size=10_000)
-    for chunk in chunks:
-        _process_chunk(
-            chunk,
-            columns,
-            sample,
-            inputs.variables,
-            inputs.parameters,
-            output_variable,
-            output_classes,
-            campaigns,
-            parameter_values,
-            models,
-            transformations,
-            n_folds,
-            cfg.training.batch_size,
-        )
+    produce_friend(
+        sample,
+        output_file,
+        columns,
+        campaign_name(cfg.campaigns, sample.era),
+        cfg.inputs.variables,
+        cfg.inputs.parameters,
+        cfg.outputs.variables[0],
+        cfg.outputs.classes,
+        pd.DataFrame.from_records(cfg.parameter_values),
+        models,
+        transformations,
+        cfg.mode.n_folds,
+        cfg.training.batch_size,
+        cfg.chunk_size,
+    )
 
 
 if __name__ == "__main__":

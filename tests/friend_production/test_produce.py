@@ -1,5 +1,6 @@
 """Tests for the functions of the friend production CLI script."""
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -510,19 +511,16 @@ def test_process_chunk(write_tree, models, transformations, parameter_values):
         ),
         write_tree("b.root", {"event": [13, 14], "pt": [33.0, 39.0]}),
     ]
-    sample = _sample(main)
-    sample.era = "2024"
-    (chunk,) = produce.determine_chunks(sample, chunk_size=100)
+    (chunk,) = produce.determine_chunks(_sample(main), chunk_size=100)
 
     df = produce._process_chunk(
         chunk,
         ["event", "pt"],
-        sample,
+        "2024_nano_v15",
         INPUT_VARIABLES,
         INPUT_PARAMETERS,
         OUTPUT_VARIABLE,
         OUTPUT_CLASSES,
-        [Campaign("2024_nano_v15", "2024"), Campaign("2025_nano_v15", "2025")],
         parameter_values,
         models,
         transformations,
@@ -746,3 +744,206 @@ def test_write_friend_file_failure_keeps_previous_output(tmp_path):
 
     with uproot.open(output_file) as f:
         assert f["ntuple"].num_entries == 1
+
+
+# ------------------------------------------------------- input file selection
+
+SERVER = "root://server:1094/"
+
+
+def _metadata_samples():
+    def files(prefix, era, sample, channel, n):
+        return [
+            f"{SERVER}/store/{prefix}/{era}/{sample}/{channel}/f_{i}.root"
+            for i in range(n)
+        ]
+
+    return [
+        Sample(
+            era=era,
+            sample=sample,
+            channel=channel,
+            main_files=files("ntuples", era, sample, channel, 2),
+            friend_files={
+                "kinfit": files("friends/kinfit", era, sample, channel, 2),
+                "fastmtt": files("friends/fastmtt", era, sample, channel, 2),
+            },
+            shifts=[],
+        )
+        for era in ["2024", "2025"]
+        for sample in ["DY", "TT"]
+        for channel in ["et", "mt"]
+    ]
+
+
+def test_select_input_file_full_path():
+    samples = _metadata_samples()
+    input_file = f"{SERVER}/store/ntuples/2025/TT/mt/f_1.root"
+
+    sample = produce.select_input_file(samples, input_file, "mt")
+
+    assert (sample.era, sample.sample, sample.channel) == ("2025", "TT", "mt")
+    assert sample.main_files == [input_file]
+    assert sample.friend_files == {
+        "kinfit": [f"{SERVER}/store/friends/kinfit/2025/TT/mt/f_1.root"],
+        "fastmtt": [f"{SERVER}/store/friends/fastmtt/2025/TT/mt/f_1.root"],
+    }
+
+
+@pytest.mark.parametrize(
+    "input_file",
+    ["/store/ntuples/2024/DY/et/f_0.root", "ntuples/2024/DY/et/f_0.root"],
+)
+def test_select_input_file_trailing_path(input_file):
+    sample = produce.select_input_file(_metadata_samples(), input_file, "et")
+
+    assert sample.main_files == [f"{SERVER}/store/ntuples/2024/DY/et/f_0.root"]
+
+
+def test_select_input_file_keeps_metadata():
+    samples = _metadata_samples()
+    before = [dataclasses.replace(s) for s in samples]
+
+    produce.select_input_file(samples, "ntuples/2024/DY/et/f_0.root", "et")
+
+    assert samples == before
+
+
+def test_select_input_file_not_found():
+    with pytest.raises(ValueError, match="not found"):
+        produce.select_input_file(
+            _metadata_samples(), "ntuples/2024/DY/et/f_9.root", "et"
+        )
+
+
+def test_select_input_file_ambiguous():
+    with pytest.raises(ValueError, match="matches several"):
+        produce.select_input_file(_metadata_samples(), "f_0.root", "et")
+
+
+def test_select_input_file_partial_file_name_does_not_match():
+    with pytest.raises(ValueError, match="not found"):
+        produce.select_input_file(
+            _metadata_samples(), "ntuples/2024/DY/et/_0.root", "et"
+        )
+
+
+def test_select_input_file_wrong_channel():
+    with pytest.raises(ValueError, match="belongs to channel mt"):
+        produce.select_input_file(
+            _metadata_samples(), "ntuples/2024/DY/mt/f_0.root", "et"
+        )
+
+
+def test_default_output_file():
+    sample = produce.select_input_file(
+        _metadata_samples(), "ntuples/2025/TT/et/f_1.root", "et"
+    )
+
+    output_file = produce.default_output_file(Path("out/friend"), sample)
+
+    assert output_file == Path("out/friend/2025/TT/et/f_1.root")
+
+
+def test_campaign_name():
+    campaigns = [
+        Campaign("2024_nano_v15", "2024"),
+        Campaign("2025_nano_v15", "2025"),
+    ]
+
+    assert produce.campaign_name(campaigns, "2025") == "2025_nano_v15"
+    with pytest.raises(ValueError, match="era 2023"):
+        produce.campaign_name(campaigns, "2023")
+
+
+# ------------------------------------------------------------- produce_friend
+
+
+def _produce_friend(sample, output_file, models, transformations, **kwargs):
+    produce.produce_friend(
+        sample,
+        output_file,
+        ["event", "pt"],
+        "2024_nano_v15",
+        INPUT_VARIABLES,
+        INPUT_PARAMETERS,
+        OUTPUT_VARIABLE,
+        OUTPUT_CLASSES,
+        pd.DataFrame({"m_x": [400, 1000]}),
+        models,
+        transformations,
+        N_FOLDS,
+        batch_size=4,
+        **kwargs,
+    )
+
+
+def test_produce_friend(tmp_path, write_tree, models, transformations):
+    events = [10, 11, 12, 13, 14, 15, 16]
+    main = write_tree(
+        "main.root",
+        {"event": events, "pt": np.linspace(10.0, 40.0, len(events))},
+    )
+    output_file = tmp_path / "out" / "friend.root"
+
+    _produce_friend(
+        _sample([main]), output_file, models, transformations, chunk_size=3
+    )
+
+    with uproot.open(output_file) as f:
+        tree = f["ntuple"]
+        assert tree.num_entries == len(events)
+        assert tree.keys() == [
+            f"{c}_m_x_{m}"
+            for m in [400, 1000]
+            for c in SCORE_COLUMNS + ["max_score_index"]
+        ]
+        arrays = tree.arrays(library="np")
+
+    names = [c.name for c in OUTPUT_CLASSES]
+    for entry, event in enumerate(events):
+        preferred = FOLD_PREFERRED_CLASS[event % N_FOLDS]
+        for m in [400, 1000]:
+            np.testing.assert_allclose(
+                [arrays[f"{c}_m_x_{m}"][entry] for c in SCORE_COLUMNS],
+                _expected_scores(preferred),
+                rtol=1e-6,
+            )
+            assert arrays[f"max_score_index_m_x_{m}"][entry] == names.index(
+                preferred
+            )
+
+
+def test_produce_friend_reads_inputs_from_friends(
+    tmp_path, write_tree, models, transformations
+):
+    main = write_tree("main.root", {"event": [10, 11, 12]})
+    friend = write_tree("kinfit.root", {"pt": [12.0, 18.0, 25.0]})
+    output_file = tmp_path / "friend.root"
+
+    _produce_friend(
+        _sample([main], {"kinfit": [friend]}),
+        output_file,
+        models,
+        transformations,
+        chunk_size=2,
+    )
+
+    with uproot.open(output_file) as f:
+        assert f["ntuple"].num_entries == 3
+
+
+@pytest.mark.parametrize("branches", [{}, None])
+def test_produce_friend_empty_main_file(
+    tmp_path, write_tree, models, transformations, branches
+):
+    main = write_tree("main.root", branches)
+    output_file = tmp_path / "friend.root"
+
+    _produce_friend(
+        _sample([main]), output_file, models, transformations, chunk_size=2
+    )
+
+    with uproot.open(output_file) as f:
+        assert f["ntuple"].num_entries == 0
+        assert len(f["ntuple"].keys()) == 2 * 4

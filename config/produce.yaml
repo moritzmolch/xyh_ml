@@ -18,6 +18,27 @@ defaults:
 
 metadata_file: data/output/friends/${ntuple.tag}/metadata/metadata.json.gz
 
+# Main ntuple file to produce the friend file for. Must be one of the main
+# files in the metadata file, given either as full path (including the XRootD
+# server) or as a trailing part of it that matches exactly one main file. The
+# file must belong to the channel `mode.channel`, for which the models are
+# loaded.
+input_file: ???
+
+# Name of the friend. By default, the output file is written to
+# <output_dir>/<era>/<sample>/<channel>/<file name of the input file>,
+# mirroring the CROWN friend directory layout.
+friend_name: pnn-${tags.training_tag}-${mode.decay_mode}
+output_dir: data/output/friends/${ntuple.tag}/CROWNFriend/${friend_name}
+
+# Explicit output file, overrides the default path derived from `output_dir`
+output_file: null
+
+# Number of events evaluated at once. Every event is evaluated for every
+# entry in `parameter_values`, so a chunk has
+# chunk_size * len(parameter_values) rows.
+chunk_size: 1000
+
 parameter_values:
 - m_x: 400
   m_y: 100
