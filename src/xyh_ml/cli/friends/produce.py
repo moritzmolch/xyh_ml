@@ -220,13 +220,71 @@ def load_data_frame(
 
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
-    config_name="scrape_metadata",
+    config_name="produce",
     version_base="1.3",
 )
 def main(cfg: Config):
     # Get sample metadata
     metadata_file = Path(cfg.metadata_file)
+
+    # Define the neural network inputs and parameters and get the columns
+    inputs = cfg.inputs
+    parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
+    columns = [EVENT_COLUMN_NAME] + [v.name for v in cfg.inputs.variables]
+
+    # Load campaigns and create lookup table for campaign and channel names
+    campaigns = cfg.campaigns
+    eras_lookup = {c.era: c for c in campaigns}
+
+    # Number of folds to split the data into for cross-validation
+    n_folds = cfg.mode.n_folds
+
+    # Get the models for all folds
+    training_dir = cfg.artifacts.training_dir
+    fold_models = {}
+    fold_transformations = {}
+    for fold in range(n_folds):
+        # Replace the fold placeholder with the actual fold number
+        # TODO This should be coded in a more robust way
+        fold_training_dir = Path(
+            training_dir.replace(
+                f"fold{cfg.mode.fold}of{n_folds}", f"fold{fold}of{n_folds}"
+            )
+        )
+
+        # Load transformations from the training artifacts
+        fold_transformations[fold] = load_transformations(
+            fold_training_dir / "transformations.pkl"
+        )
+
+        # Create the neural network model
+        model = create_multi_layer_perceptron_model(
+            len(cfg.inputs.variables) + len(cfg.inputs.parameters),
+            len(cfg.outputs.classes),
+            cfg.network,
+        )
+
+        # Load checkpoints from the training artifacts
+        best_model_ckpt_file = fold_training_dir / "best_model.ckpt"
+        best_model_state_dict = torch.load(
+            best_model_ckpt_file, map_location="cpu", weights_only=True
+        )["state_dict"]
+
+        # Rename keys in the state dict to match the bare model's keys if they are
+        # prefixed with "model."
+        for key in list(best_model_state_dict.keys()):
+            new_key = key
+            if key.startswith("model."):
+                new_key = key.replace("model.", "", 1)
+            best_model_state_dict[new_key] = best_model_state_dict.pop(key)
+        model.load_state_dict(best_model_state_dict)
+
+        # Store the model for this fold
+        fold_models[fold] = model
+
+    # Get sample metadata
     samples = [Sample(**s) for s in load_json(metadata_file)]
+    sample = next(samples)
 
 
 if __name__ == "__main__":
