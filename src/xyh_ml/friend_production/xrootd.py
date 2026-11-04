@@ -11,6 +11,13 @@ logger = logging.getLogger(__name__)
 MAIN_NTUPLE_DIR_NAME = "CROWNRun"
 FRIEND_NTUPLE_DIR_NAME = "CROWNFriend"
 
+# XRootD error number of a path that does not exist (kXR_NotFound)
+XRD_NOT_FOUND = 3011
+
+
+class DirectoryNotFoundError(RuntimeError):
+    """The directory to list does not exist."""
+
 
 def xrd_ls(xrd_fs: FileSystem, path: str, flags: DirListFlags | None = None):
     # If no special flags are provided, use the `NONE` flag
@@ -22,6 +29,10 @@ def xrd_ls(xrd_fs: FileSystem, path: str, flags: DirListFlags | None = None):
     # Check query status
     if not status.ok:
         msg = f"Failed to list directory {path}: {status.message}"
+        # A missing directory may be expected, so leave logging it to the
+        # caller
+        if status.errno == XRD_NOT_FOUND:
+            raise DirectoryNotFoundError(msg)
         logger.error(msg)
         raise RuntimeError(msg)
 

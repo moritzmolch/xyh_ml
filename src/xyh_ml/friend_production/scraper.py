@@ -8,6 +8,7 @@ from XRootD.client import FileSystem
 from xyh_ml.config.dataclasses import Campaign, Channel, Friend
 from xyh_ml.friend_production.dataclasses import Sample, Shift, Variable
 from xyh_ml.friend_production.xrootd import (
+    DirectoryNotFoundError,
     get_channel_dirs,
     get_era_dirs,
     get_files,
@@ -137,6 +138,9 @@ def scrape_metadata(
     # Container for sample specs
     sample_metadata = []
 
+    # Samples skipped because of missing or incomplete friends, with the reason
+    skipped_samples = []
+
     # Iterate through the eras, samples, and channels to collect sample
     # metadata
     for era, era_dir in get_era_dirs(
@@ -186,6 +190,7 @@ def scrape_metadata(
                 # Get the corresponding friend filelists for this sample
                 # (if any exist)
                 friend_files = {}
+                friend_problems = []
                 for friend in friends:
                     # Check if the channel is skipped
                     if (
@@ -233,15 +238,42 @@ def scrape_metadata(
                         continue
 
                     # Get the list of friend files for this sample
-                    friend_files[friend.name] = get_friend_files(
-                        xrd_fs,
-                        base_dir,
-                        ntuple_tag,
-                        friend.name,
-                        era,
-                        sample,
-                        channel,
+                    try:
+                        friend_files[friend.name] = get_friend_files(
+                            xrd_fs,
+                            base_dir,
+                            ntuple_tag,
+                            friend.name,
+                            era,
+                            sample,
+                            channel,
+                        )
+                    except DirectoryNotFoundError:
+                        friend_problems.append(f"{friend.name} is missing")
+                        continue
+
+                    # Friend files are matched to the main files by their
+                    # position, so both need the same file names
+                    if _file_names(friend_files[friend.name]) != _file_names(
+                        main_files
+                    ):
+                        friend_problems.append(
+                            f"{friend.name} has "
+                            + f"{len(friend_files[friend.name])} files with "
+                            + "names different from the "
+                            + f"{len(main_files)} main files"
+                        )
+
+                # Skip samples with missing or incomplete friends, as their
+                # friend columns would be missing or misaligned
+                if friend_problems:
+                    reason = "; ".join(friend_problems)
+                    logger.warning(
+                        f"Skipping sample {sample} ({era}, {channel}): "
+                        + f"{reason}."
                     )
+                    skipped_samples.append((era, sample, channel, reason))
+                    continue
 
                 # Get the shifts for this sample
                 shifts = get_shifts(main_files, friend_files)
@@ -258,4 +290,19 @@ def scrape_metadata(
                     )
                 )
 
+    if skipped_samples:
+        logger.warning(
+            f"Skipped {len(skipped_samples)} samples because of missing or "
+            + "incomplete friends:\n"
+            + "\n".join(
+                f"  {era} {sample} {channel}: {reason}"
+                for era, sample, channel, reason in skipped_samples
+            )
+        )
+
     return sample_metadata
+
+
+def _file_names(files: list[str]) -> list[str]:
+    """Sorted file names of ``files`` without their directories."""
+    return sorted(f.rsplit("/", 1)[-1] for f in files)

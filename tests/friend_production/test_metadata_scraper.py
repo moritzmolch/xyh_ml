@@ -7,6 +7,7 @@ from xyh_ml import PROJECT_DIR
 from xyh_ml.config.dataclasses import Campaign, Channel, Friend
 from xyh_ml.friend_production import scraper as ms
 from xyh_ml.friend_production.dataclasses import Sample, Shift, Variable
+from xyh_ml.friend_production.xrootd import DirectoryNotFoundError
 
 # ---------------------------------------------------------------- get_shifts
 
@@ -162,10 +163,27 @@ def test_get_shifts_groups_unshifted_columns_as_nominal(make_root_file):
 class Recorder:
     """Patch the get_* helpers used by scrape_metadata."""
 
-    def __init__(self, monkeypatch, eras, samples, channels, files=None):
+    def __init__(
+        self,
+        monkeypatch,
+        eras,
+        samples,
+        channels,
+        files=None,
+        friend_files=None,
+    ):
+        """``files`` maps a channel directory to its main files (default:
+        ``m.root``). Friend files have the same file names as the main
+        files, unless ``friend_files`` maps ``(friend, era, sample,
+        channel)`` to other files, or to ``None`` for a missing directory.
+        """
         self.friend_calls = []
         self.shift_calls = []
         files = files or {}
+        friend_files = friend_files or {}
+
+        def main_files(d):
+            return files.get(d, [f"{d}/m.root"])
 
         monkeypatch.setattr(
             ms,
@@ -182,13 +200,21 @@ class Recorder:
             "get_channel_dirs",
             lambda fs, d: {c: f"{d}/{c}" for c in channels},
         )
-        monkeypatch.setattr(
-            ms, "get_files", lambda fs, d: files.get(d, [f"{d}/m.root"])
-        )
+        monkeypatch.setattr(ms, "get_files", lambda fs, d: main_files(d))
 
         def get_friend_files(fs, base, tag, friend, era, sample, channel):
             self.friend_calls.append((base, tag, friend, era, sample, channel))
-            return [f"{friend}/{era}/{sample}/{channel}.root"]
+            key = (friend, era, sample, channel)
+            if key in friend_files:
+                if friend_files[key] is None:
+                    raise DirectoryNotFoundError(f"no such dir for {key}")
+                return friend_files[key]
+            main_dir = f"{base}/{tag}/CROWNRun/{era}/{sample}/{channel}"
+            friend_dir = f"{base}/{tag}/CROWNFriend/{friend}/{era}/{sample}"
+            return [
+                f.replace(main_dir, f"{friend_dir}/{channel}")
+                for f in main_files(main_dir)
+            ]
 
         monkeypatch.setattr(ms, "get_friend_files", get_friend_files)
 
@@ -232,7 +258,9 @@ def test_scrape_metadata_builds_sample_object(recorder):
     assert sample.sample == "A"
     assert sample.channel == "et"
     assert sample.main_files == ["/base/tag/CROWNRun/2018/A/et/m.root"]
-    assert sample.friend_files == {"fr": ["fr/2018/A/et.root"]}
+    assert sample.friend_files == {
+        "fr": ["/base/tag/CROWNFriend/fr/2018/A/et/m.root"]
+    }
     assert rec.friend_calls == [("/base", "tag", "fr", "2018", "A", "et")]
     assert sample.shifts == []
     assert rec.shift_calls == [(sample.main_files, sample.friend_files)]
@@ -298,6 +326,125 @@ def test_scrape_metadata_channel_not_in_channels_is_skipped(recorder, caplog):
 def test_scrape_metadata_without_channels_is_empty(recorder):
     recorder(channels=["et", "mt"])
     assert run(channels=[]) == []
+
+
+def test_scrape_metadata_missing_friend_skips_sample(recorder, caplog):
+    rec = recorder(
+        samples=["A", "B"],
+        channels=["et", "mt"],
+        friend_files={("fr2", "2018", "B", "mt"): None},
+    )
+    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
+        result = run(friends=[Friend(name="fr1"), Friend(name="fr2")])
+
+    assert [(s.sample, s.channel) for s in result] == [
+        ("A", "et"),
+        ("A", "mt"),
+        ("B", "et"),
+    ]
+    assert "Skipping sample B (2018, mt): fr2 is missing." in caplog.text
+    assert "Skipped 1 samples" in caplog.text
+    assert "2018 B mt: fr2 is missing" in caplog.text
+    # The shifts are not read for the skipped sample
+    assert len(rec.shift_calls) == 3
+
+
+def test_scrape_metadata_reports_all_missing_friends_of_a_sample(
+    recorder, caplog
+):
+    recorder(
+        friend_files={
+            ("fr1", "2018", "A", "et"): None,
+            ("fr2", "2018", "A", "et"): None,
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
+        result = run(friends=[Friend(name="fr1"), Friend(name="fr2")])
+
+    assert result == []
+    assert "fr1 is missing; fr2 is missing" in caplog.text
+
+
+def test_scrape_metadata_excluded_friend_is_not_required(recorder, caplog):
+    rec = recorder(friend_files={("fr", "2018", "A", "et"): None})
+    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
+        (result,) = run(friends=[Friend(name="fr", exclude_channels=["et"])])
+
+    assert result.friend_files == {}
+    assert rec.friend_calls == []
+    assert "Skipping sample" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "friend_names",
+    [
+        ["1.root"],  # missing file
+        ["1.root", "2.root", "3.root"],  # additional file
+        ["1.root", "3.root"],  # other file
+    ],
+)
+def test_scrape_metadata_incomplete_friend_skips_sample(
+    recorder, caplog, friend_names
+):
+    main_dir = "/base/tag/CROWNRun/2018/A/et"
+    recorder(
+        files={main_dir: [f"{main_dir}/1.root", f"{main_dir}/2.root"]},
+        friend_files={
+            ("fr", "2018", "A", "et"): [f"fr/{n}" for n in friend_names]
+        },
+    )
+    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
+        result = run(friends=[Friend(name="fr")])
+
+    assert result == []
+    assert (
+        f"fr has {len(friend_names)} files with names different from the 2 "
+        + "main files"
+    ) in caplog.text
+
+
+def test_scrape_metadata_other_friend_listing_error_raises(
+    recorder, monkeypatch
+):
+    recorder()
+
+    def get_friend_files(*args):
+        raise RuntimeError("not authorized")
+
+    monkeypatch.setattr(ms, "get_friend_files", get_friend_files)
+    with pytest.raises(RuntimeError, match="not authorized"):
+        run(friends=[Friend(name="fr")])
+
+
+def test_scrape_metadata_missing_friend_directory_on_file_system(
+    monkeypatch, fake_fs_factory, caplog
+):
+    """With the real XRootD helpers, a missing friend directory skips the
+    sample instead of stopping the scraping."""
+    fs = fake_fs_factory(
+        {
+            "/base/tag/CROWNRun": ["2018"],
+            "/base/tag/CROWNRun/2018": ["A", "B"],
+            "/base/tag/CROWNRun/2018/A": ["et"],
+            "/base/tag/CROWNRun/2018/A/et": ["1.root"],
+            "/base/tag/CROWNRun/2018/B": ["et"],
+            "/base/tag/CROWNRun/2018/B/et": ["1.root"],
+            "/base/tag/CROWNFriend/fr/2018/A/et": ["1.root", "map.json"],
+        }
+    )
+    monkeypatch.setattr(ms, "get_shifts", lambda m, f: [])
+    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
+        result = ms.scrape_metadata(
+            fs, "/base", "tag", [Friend(name="fr")], CAMPAIGNS, CHANNELS
+        )
+
+    assert [s.sample for s in result] == ["A"]
+    assert result[0].friend_files == {
+        "fr": [
+            "root://server.example:1094//base/tag/CROWNFriend/fr/2018/A/et/1.root"
+        ]
+    }
+    assert "Skipping sample B (2018, et): fr is missing." in caplog.text
 
 
 def test_scrape_metadata_sample_filter(recorder):

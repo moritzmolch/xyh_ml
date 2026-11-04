@@ -4,6 +4,7 @@ import pytest
 from XRootD.client.flags import DirListFlags
 
 from xyh_ml.friend_production.xrootd import (
+    DirectoryNotFoundError,
     get_channel_dirs,
     get_era_dirs,
     get_files,
@@ -35,11 +36,26 @@ def test_xrd_ls_empty_directory(fake_fs_factory):
 
 
 def test_xrd_ls_failure_raises_with_message(fake_fs_factory, caplog):
+    # 3010: not authorized
+    fs = fake_fs_factory({}, errors={"/denied": 3010})
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="no such dir /denied") as e:
+            xrd_ls(fs, "/denied")
+    assert not isinstance(e.value, DirectoryNotFoundError)
+    assert "Failed to list directory /denied" in caplog.text
+
+
+def test_xrd_ls_missing_directory_raises_not_found(fake_fs_factory, caplog):
     fs = fake_fs_factory({})
     with caplog.at_level(logging.ERROR):
-        with pytest.raises(RuntimeError, match="no such dir /missing"):
+        with pytest.raises(DirectoryNotFoundError, match="/missing"):
             xrd_ls(fs, "/missing")
-    assert "Failed to list directory /missing" in caplog.text
+    # Left to the caller, which may expect the directory to be missing
+    assert caplog.text == ""
+
+
+def test_directory_not_found_error_is_runtime_error():
+    assert issubclass(DirectoryNotFoundError, RuntimeError)
 
 
 def test_get_era_dirs(fake_fs_factory):

@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 import uproot
 
+from xyh_ml.friend_production.xrootd import XRD_NOT_FOUND
+
 
 SERVER_URL = "root://server.example:1094/"
 
@@ -17,18 +19,25 @@ class FakeFileSystem:
     ``listings`` maps a directory path to the list of entry names it holds.
     Unknown paths yield a failing status. All calls are recorded. ``url`` is
     the server URL, as ``str(FileSystem(...).url)`` returns it (with a
-    trailing slash).
+    trailing slash). Unknown paths fail like a missing directory on the
+    server (error number 3011), unless ``errors`` maps them to another error
+    number.
     """
 
-    def __init__(self, listings, url=SERVER_URL):
+    def __init__(self, listings, url=SERVER_URL, errors=None):
         self.listings = listings
         self.url = url
+        self.errors = errors or {}
         self.calls = []
 
     def dirlist(self, path, flags=None):
         self.calls.append((path, flags))
         if path not in self.listings:
-            status = SimpleNamespace(ok=False, message=f"no such dir {path}")
+            status = SimpleNamespace(
+                ok=False,
+                errno=self.errors.get(path, XRD_NOT_FOUND),
+                message=f"no such dir {path}",
+            )
             return status, None
         listing = [SimpleNamespace(name=n) for n in self.listings[path]]
         return SimpleNamespace(ok=True, message=""), listing
@@ -38,8 +47,8 @@ class FakeFileSystem:
 def fake_fs_factory():
     """Return a factory building a :class:`FakeFileSystem`."""
 
-    def factory(listings=None):
-        return FakeFileSystem(dict(listings or {}))
+    def factory(listings=None, errors=None):
+        return FakeFileSystem(dict(listings or {}), errors=errors)
 
     return factory
 
