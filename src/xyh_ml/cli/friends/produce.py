@@ -229,20 +229,21 @@ def main(cfg: Config):
 
     # Define the neural network inputs and parameters and get the columns
     inputs = cfg.inputs
+    output_variable = cfg.outputs.variables[0]
+    output_classes = cfg.outputs.classes
     parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
     columns = [EVENT_COLUMN_NAME] + [v.name for v in cfg.inputs.variables]
 
     # Load campaigns and create lookup table for campaign and channel names
     campaigns = cfg.campaigns
-    eras_lookup = {c.era: c for c in campaigns}
 
     # Number of folds to split the data into for cross-validation
     n_folds = cfg.mode.n_folds
 
     # Get the models for all folds
     training_dir = cfg.artifacts.training_dir
-    fold_models = {}
-    fold_transformations = {}
+    models = {}
+    transformations = {}
     for fold in range(n_folds):
         # Replace the fold placeholder with the actual fold number
         # TODO This should be coded in a more robust way
@@ -253,7 +254,7 @@ def main(cfg: Config):
         )
 
         # Load transformations from the training artifacts
-        fold_transformations[fold] = load_transformations(
+        transformations[fold] = load_transformations(
             fold_training_dir / "transformations.pkl"
         )
 
