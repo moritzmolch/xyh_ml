@@ -6,8 +6,11 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import mplhep as hep
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 from pandas import DataFrame
 
 from xyh_ml.config import Config
@@ -37,6 +40,54 @@ CHANNEL_LABELS = {
     "mt": r"$\mu\tau_{\text{h}}$",
     "tt": r"$\tau_{\text{h}}\tau_{\text{h}}$",
 }
+
+
+def set_plot_style() -> None:
+    """
+    Use the CMS plot style of `mplhep` for all following plots.
+    """
+    hep.style.use("CMS")
+
+
+def get_style_color(index: int) -> str:
+    """
+    Get a color of the color cycle of the current plot style.
+
+    Parameters
+    ----------
+    index : int
+        Index in the color cycle, wrapped around if it exceeds the number of
+        colors.
+
+    Returns
+    -------
+    str
+        Color of the current color cycle.
+    """
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    return colors[index % len(colors)]
+
+
+def add_cms_label(
+    ax: Axes,
+    rlabel: str,
+    llabel: str = "Private Work",
+) -> None:
+    """
+    Add the CMS label to the upper left and a description to the upper right
+    of the given axes.
+
+    Parameters
+    ----------
+    ax : Axes
+        Axes to add the labels to.
+    rlabel : str
+        Text on the upper right of the axes.
+    llabel : str, optional
+        Text following "CMS" on the upper left of the axes. Default is
+        `"Private Work"`.
+    """
+    hep.cms.label(llabel, ax=ax, data=True, rlabel=rlabel, loc=0)
 
 
 def get_predictions_file(cfg: Config) -> Path:

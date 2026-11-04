@@ -4,7 +4,7 @@ import hydra
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
+from matplotlib.ticker import NullLocator
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.config import Config, OutputClass
@@ -13,11 +13,14 @@ from xyh_ml.plotting import (
     CHANNEL_LABELS,
     DECAY_MODE_LABELS,
     add_class_indices,
+    add_cms_label,
     get_fold_label,
+    get_style_color,
     load_predictions,
+    set_plot_style,
 )
 
-sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
+set_plot_style()
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -41,7 +44,7 @@ def _plot_efficiencies(
     fig, ax = plt.subplots(nrows=2, figsize=(20, 12))
 
     # Color for m_x labels
-    m_x_color = sns.color_palette()[4]
+    m_x_color = get_style_color(5)
 
     for j, df_part in enumerate([eff_upper, eff_lower]):
         # Define the x axis positions and set x axis labels to m_y masses
@@ -103,7 +106,10 @@ def _plot_efficiencies(
         )
 
         # Set x labels to the m_y masses
-        ax[j].set_xticks(x[::2], labels=x_labels[::2], rotation=90)
+        ax[j].set_xticks(
+            x[::2], labels=x_labels[::2], rotation=90, fontsize=14
+        )
+        ax[j].xaxis.set_minor_locator(NullLocator())
 
         # Set axis limits and labels
         ax[j].set_xlim(np.min(x) - 0.5, np.max(x) + 0.5)
@@ -120,22 +126,23 @@ def _plot_efficiencies(
                 frameon=True,
             )
 
-    # Tighten layout and adjust spacing to avoid overlapping elements
-    fig.tight_layout(rect=[0, 0, 1, 0.9])
-    plt.subplots_adjust(top=0.88, right=0.85)
-
-    # Add title with information about decay mode, campaign, channel, and
-    # evaluated fold(s)
-    fig.suptitle(
-        "\t".join(
+    # Add the CMS label and information about decay mode, campaign, channel,
+    # and evaluated fold(s) to the upper plot
+    add_cms_label(
+        ax[0],
+        ",  ".join(
             [
                 DECAY_MODE_LABELS[decay_mode],
                 CAMPAIGN_LABELS[campaign],
                 CHANNEL_LABELS[channel],
-                f"({fold_title})",
+                fold_title,
             ]
         ),
     )
+
+    # Tighten layout and adjust spacing to avoid overlapping elements
+    fig.tight_layout()
+    plt.subplots_adjust(right=0.85)
 
     return fig, ax
 
