@@ -5,6 +5,7 @@ from pathlib import Path
 from time import time
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 from pandas import DataFrame
 from sklearn.model_selection import train_test_split
@@ -272,3 +273,68 @@ def get_unique_input_parameter_combinations(
     )
 
     return unique_parameters
+
+
+def prepare_parameter_values(
+    data_frame: pd.DataFrame,
+    parameter_values: pd.DataFrame,
+):
+    """
+    Prepare the data frame for evaluation with multiple parameter values.
+
+    All rows in the original data frame are replicated `len(parameter_values)`
+    times and unique parameter value combinations are added to the data frame.
+
+    Parameters
+    ----------
+    data_frame : pd.DataFrame
+        Data frame to prepare for evaluation with multiple parameter values.
+
+    parameter_values : pd.DataFrame
+        Data frame containing the unique parameter value combinations to add
+        to the data frame.
+    """
+    # Get names of the parameters
+    parameter_columns = parameter_values.columns
+
+    # Create a set with all unique parameter value combinations for each event.
+    # The output of this operation is an array with shape (n_events *
+    # n_unique_parameters, n_parameters).
+    n_events = data_frame.shape[0]
+    n_parameter_values = parameter_values.shape[0]
+    n_parameters = parameter_values.shape[1]
+    parameter_values_reshaped = np.reshape(
+        parameter_values.to_numpy(),
+        (1, n_parameter_values, n_parameters),
+    )
+    parameter_values_repeated = np.reshape(
+        np.repeat(parameter_values_reshaped, n_events, axis=0),
+        (n_events * n_parameter_values, n_parameters),
+    )
+    parameter_values_index = np.reshape(
+        np.repeat(
+            np.reshape(
+                np.arange(n_parameter_values),
+                (1, n_parameter_values),
+                axis=0,
+            ),
+            n_events,
+        ),
+        (n_events * n_parameter_values,),
+    )
+
+    # Repeat events as often as there are unique parameter combinations. The
+    # data frame will have n_events * n_unique_parameters rows after this
+    # operation. Append a new index level "parameter_value" to be able to
+    # track the order of events.
+    data_frame = data_frame.loc[data_frame.index.repeat(n_parameter_values)]
+    data_frame = data_frame.assign(
+        "parameter_value",
+        parameter_values_index,
+    ).set_index("parameter_value", append=True)
+
+    # Add the unique parameter value combinations to the background events data
+    # frame
+    data_frame[parameter_columns] = parameter_values_repeated
+
+    return data_frame
