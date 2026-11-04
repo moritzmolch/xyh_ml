@@ -3,6 +3,7 @@
 
 import dataclasses
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -31,12 +32,26 @@ def _snapshot_variables(cfg):
     ]
 
 
+# Main files of the metadata: (era, sample, channel, file name) -> number of
+# events. The first files of DY in et and mt hold identical events.
+MAIN_FILES = {
+    ("2024", "DY", "et", "f_0.root"): N_EVENTS,
+    ("2024", "DY", "et", "f_1.root"): 4,
+    ("2024", "DY", "mt", "f_0.root"): N_EVENTS,
+    ("2024", "TT", "et", "f_0.root"): 3,
+}
+CHANNEL_SEEDS = {"et": 0, "mt": 100}
+
+
+def _main_file(tmp_path, era, sample, channel, name):
+    return str(tmp_path / "ntuples" / era / sample / channel / name)
+
+
 @pytest.fixture
 def setup(tmp_path):
-    """Compose the produce config pointing to a temporary main file,
-    metadata file and training artifacts of two folds."""
-    rng = np.random.default_rng(0)
-    input_file = str(tmp_path / "ntuples" / "2024" / "DY" / "et" / "f_0.root")
+    """Compose the produce config pointing to temporary main files, a
+    metadata file and training artifacts of two folds for the channels et
+    and mt. The config selects the input file DY/et/f_0.root."""
     output_file = tmp_path / "friend" / "f_0.root"
 
     with initialize_config_dir(
@@ -46,7 +61,8 @@ def setup(tmp_path):
             "produce",
             overrides=[
                 f"metadata_file={tmp_path / 'metadata.json'}",
-                f"input_file={input_file}",
+                "input_file="
+                + _main_file(tmp_path, "2024", "DY", "et", "f_0.root"),
                 f"output_file={output_file}",
                 "artifacts.training_dir="
                 + str(tmp_path / "training")
@@ -60,26 +76,28 @@ def setup(tmp_path):
         )
     cfg.parameter_values = PARAMETER_VALUES
 
-    # Main file with all input variables that are part of the ntuples
+    # Main files with all input variables that are part of the ntuples
     variables = _snapshot_variables(cfg)
-    (tmp_path / "ntuples" / "2024" / "DY" / "et").mkdir(parents=True)
-    with uproot.recreate(input_file) as f:
-        f["ntuple"] = {
-            "event": np.arange(100, 100 + N_EVENTS, dtype=np.uint64),
-            **{v: rng.normal(size=N_EVENTS) for v in variables},
-        }
-
-    # Metadata with the main file of the input sample and another sample
-    sample = Sample("2024", "DY", "et", [input_file], {}, [])
-    other = dataclasses.replace(
-        sample, channel="mt", main_files=[input_file.replace("et", "mt")]
-    )
+    samples = {}
+    for (era, sample, channel, name), n in MAIN_FILES.items():
+        path = _main_file(tmp_path, era, sample, channel, name)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        rng = np.random.default_rng(n)
+        with uproot.recreate(path) as f:
+            f["ntuple"] = {
+                "event": np.arange(100, 100 + n, dtype=np.uint64),
+                **{v: rng.normal(size=n) for v in variables},
+            }
+        samples.setdefault(
+            (era, sample, channel), Sample(era, sample, channel, [], {}, [])
+        ).main_files.append(path)
     dump_json(
         tmp_path / "metadata.json",
-        [dataclasses.asdict(sample), dataclasses.asdict(other)],
+        [dataclasses.asdict(s) for s in samples.values()],
     )
 
-    # Training artifacts of every fold
+    # Training artifacts of every fold and channel
+    rng = np.random.default_rng(0)
     n_train = 20
     campaigns = [c.name for c in cfg.campaigns]
     classes = [c.name for c in cfg.outputs.classes]
@@ -100,27 +118,46 @@ def setup(tmp_path):
         + list(cfg.inputs.parameters)
         + list(cfg.outputs.variables),
     )
-    for fold, training_dir in produce._fold_training_dirs(cfg).items():
-        training_dir.mkdir(parents=True)
-        torch.manual_seed(fold)
-        model = create_multi_layer_perceptron_model(
-            len(cfg.inputs.variables) + len(cfg.inputs.parameters),
-            len(cfg.outputs.classes),
-            cfg.network,
-        )
-        torch.save(
-            {
-                "state_dict": {
-                    f"model.{k}": v for k, v in model.state_dict().items()
-                }
-            },
-            training_dir / "best_model.ckpt",
-        )
-        dump_transformations(
-            training_dir / "transformations.pkl", transformations
-        )
+    for channel, seed in CHANNEL_SEEDS.items():
+        channel_cfg = OmegaConf.merge(cfg, {"mode": {"channel": channel}})
+        for fold, training_dir in produce._fold_training_dirs(
+            channel_cfg
+        ).items():
+            training_dir.mkdir(parents=True)
+            torch.manual_seed(seed + fold)
+            model = create_multi_layer_perceptron_model(
+                len(cfg.inputs.variables) + len(cfg.inputs.parameters),
+                len(cfg.outputs.classes),
+                cfg.network,
+            )
+            torch.save(
+                {
+                    "state_dict": {
+                        f"model.{k}": v for k, v in model.state_dict().items()
+                    }
+                },
+                training_dir / "best_model.ckpt",
+            )
+            dump_transformations(
+                training_dir / "transformations.pkl", transformations
+            )
 
     return cfg, output_file
+
+
+def _sample_mode(cfg, tmp_path, **selection):
+    """Switch the config from input_file to sample mode."""
+    cfg.input_file = None
+    cfg.output_file = None
+    cfg.output_dir = str(tmp_path / "friends")
+    for key, value in selection.items():
+        cfg[key] = value
+    return cfg
+
+
+def _friend_arrays(path):
+    with uproot.open(path) as f:
+        return f["ntuple"].arrays(library="np")
 
 
 def test_main_writes_friend_for_input_file(setup):
@@ -188,14 +225,17 @@ def test_main_default_output_file(setup, tmp_path):
 @pytest.mark.parametrize("channel", ["mt", "tt"])
 def test_main_infers_channel_from_input_file(setup, channel):
     cfg, output_file = setup
-    # The input file belongs to channel et and models exist only for et:
-    # a different mode.channel must not be used to load the models
-    cfg.mode.channel = channel
+    produce.main(cfg)
+    expected = _friend_arrays(output_file)
 
+    # The input file belongs to channel et: a different mode.channel must not
+    # be used to load the models
+    cfg.mode.channel = channel
     produce.main(cfg)
 
-    with uproot.open(output_file) as f:
-        assert f["ntuple"].num_entries == N_EVENTS
+    result = _friend_arrays(output_file)
+    for key, value in expected.items():
+        np.testing.assert_array_equal(result[key], value)
 
 
 def test_main_infers_channel_for_default_output_file(setup, tmp_path):
@@ -227,19 +267,174 @@ def test_produce_config_defaults():
     with initialize_config_dir(
         str(PROJECT_DIR / "config"), version_base="1.3"
     ):
-        cfg = compose("produce", overrides=["input_file=x.root"])
+        cfg = compose("produce")
 
+    assert cfg.input_file is None
+    assert cfg.sample is None
+    assert cfg.era is None
+    assert cfg.channel is None
+    assert cfg.skip_existing is False
     assert cfg.output_file is None
     assert cfg.chunk_size > 0
     assert cfg.output_dir.endswith(f"CROWNFriend/{cfg.friend_name}")
     assert cfg.friend_name == (
         f"pnn-{cfg.tags.training_tag}-{cfg.mode.decay_mode}"
     )
-    assert OmegaConf.is_missing(compose_without_input_file(), "input_file")
 
 
-def compose_without_input_file():
-    with initialize_config_dir(
-        str(PROJECT_DIR / "config"), version_base="1.3"
-    ):
-        return compose("produce")
+# ---------------------------------------------------------------- sample mode
+
+
+def test_main_sample_processes_all_files_of_all_channels(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY")
+
+    produce.main(cfg)
+
+    friends = tmp_path / "friends" / "2024" / "DY"
+    assert sorted(
+        str(p.relative_to(friends)) for p in friends.rglob("*.root")
+    ) == ["et/f_0.root", "et/f_1.root", "mt/f_0.root"]
+    for (era, sample, channel, name), n in MAIN_FILES.items():
+        if sample == "DY":
+            arrays = _friend_arrays(friends / channel / name)
+            assert len(arrays["max_score_m_x_400_m_y_100"]) == n
+    # Other samples are not processed
+    assert not (tmp_path / "friends" / "2024" / "TT").exists()
+
+
+def test_main_sample_uses_models_of_the_file_channel(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY")
+
+    produce.main(cfg)
+
+    # Identical events in et and mt, evaluated with different models
+    friends = tmp_path / "friends" / "2024" / "DY"
+    et = _friend_arrays(friends / "et" / "f_0.root")
+    mt = _friend_arrays(friends / "mt" / "f_0.root")
+    assert not np.allclose(
+        et["max_score_m_x_400_m_y_100"], mt["max_score_m_x_400_m_y_100"]
+    )
+
+    # The et friend equals the one of the single-file mode
+    cfg_single, output_file = setup
+    cfg_single.input_file = _main_file(
+        tmp_path, "2024", "DY", "et", "f_0.root"
+    )
+    cfg_single.sample = None
+    cfg_single.output_file = str(output_file)
+    produce.main(cfg_single)
+    single = _friend_arrays(output_file)
+    for key, value in single.items():
+        np.testing.assert_array_equal(et[key], value)
+
+
+@pytest.mark.parametrize(
+    "selection, expected",
+    [
+        ({"channel": "mt"}, ["mt/f_0.root"]),
+        ({"era": "2024", "channel": "et"}, ["et/f_0.root", "et/f_1.root"]),
+    ],
+)
+def test_main_sample_restricted(setup, tmp_path, selection, expected):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY", **selection)
+
+    produce.main(cfg)
+
+    friends = tmp_path / "friends" / "2024" / "DY"
+    assert (
+        sorted(str(p.relative_to(friends)) for p in friends.rglob("*.root"))
+        == expected
+    )
+
+
+def test_main_sample_profile_sums_over_files(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+    cfg.profile_file = str(tmp_path / "profile.json")
+
+    produce.main(cfg)
+
+    profile = json.loads((tmp_path / "profile.json").read_text())
+    n_events = N_EVENTS + 4
+    assert profile["n_events"] == n_events
+    assert profile["n_rows"] == n_events * len(PARAMETER_VALUES)
+    # chunk_size=3: 3 chunks for 7 events, 2 chunks for 4 events
+    assert profile["n_chunks"] == 5
+
+
+def test_main_sample_skip_existing(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+    produce.main(cfg)
+    friends = tmp_path / "friends" / "2024" / "DY" / "et"
+    # Mark the existing friend of f_0 and remove the one of f_1
+    (friends / "f_0.root").write_bytes(b"existing")
+    (friends / "f_1.root").unlink()
+
+    cfg.skip_existing = True
+    produce.main(cfg)
+
+    assert (friends / "f_0.root").read_bytes() == b"existing"
+    assert (
+        len(_friend_arrays(friends / "f_1.root")["max_score_m_x_400_m_y_100"])
+        == 4
+    )
+
+
+def test_main_sample_overwrites_without_skip_existing(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+    friends = tmp_path / "friends" / "2024" / "DY" / "et"
+    friends.mkdir(parents=True)
+    (friends / "f_0.root").write_bytes(b"existing")
+
+    produce.main(cfg)
+
+    assert (
+        len(_friend_arrays(friends / "f_0.root")["max_score_m_x_400_m_y_100"])
+        == N_EVENTS
+    )
+
+
+def test_main_sample_continues_after_failure(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+    # Corrupt the first input file
+    broken = _main_file(tmp_path, "2024", "DY", "et", "f_0.root")
+    Path(broken).write_bytes(b"not a ROOT file")
+
+    with pytest.raises(RuntimeError, match="1 file\\(s\\)") as error:
+        produce.main(cfg)
+
+    assert broken in str(error.value)
+    friends = tmp_path / "friends" / "2024" / "DY" / "et"
+    assert not (friends / "f_0.root").exists()
+    assert (
+        len(_friend_arrays(friends / "f_1.root")["max_score_m_x_400_m_y_100"])
+        == 4
+    )
+
+
+def test_main_sample_not_found(setup, tmp_path):
+    cfg = _sample_mode(setup[0], tmp_path, sample="WJets")
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="Sample WJets .* not found"):
+        produce.main(cfg)
+
+
+@pytest.mark.parametrize(
+    "input_file, sample, output_file, match",
+    [
+        (None, None, None, "Exactly one of input_file and sample"),
+        ("x.root", "DY", None, "Exactly one of input_file and sample"),
+        (None, "DY", "out.root", "output_file can only be set"),
+    ],
+)
+def test_main_invalid_input_selection(
+    setup, input_file, sample, output_file, match
+):
+    cfg, _ = setup
+    cfg.input_file = input_file
+    cfg.sample = sample
+    cfg.output_file = output_file
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match=match):
+        produce.main(cfg)

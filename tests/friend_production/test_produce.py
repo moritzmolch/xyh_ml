@@ -873,6 +873,50 @@ def test_select_input_file_channel_from_file(channel):
     ]
 
 
+def test_select_sample_files_all_eras_and_channels():
+    files = produce.select_sample_files(_metadata_samples(), "TT")
+
+    assert [s.main_files[0] for s in files] == [
+        f"{SERVER}/store/ntuples/{era}/TT/{channel}/f_{i}.root"
+        for era in ["2024", "2025"]
+        for channel in ["et", "mt"]
+        for i in range(2)
+    ]
+    for s in files:
+        assert s.sample == "TT"
+        (main_file,) = s.main_files
+        assert s.friend_files == {
+            name: [main_file.replace("ntuples", f"friends/{name}")]
+            for name in ["kinfit", "fastmtt"]
+        }
+
+
+@pytest.mark.parametrize(
+    "era, channel, expected",
+    [
+        ("2025", None, [("2025", "et"), ("2025", "mt")]),
+        (None, "mt", [("2024", "mt"), ("2025", "mt")]),
+        ("2024", "et", [("2024", "et")]),
+    ],
+)
+def test_select_sample_files_restricted(era, channel, expected):
+    files = produce.select_sample_files(
+        _metadata_samples(), "DY", era=era, channel=channel
+    )
+
+    assert sorted({(s.era, s.channel) for s in files}) == expected
+    assert len(files) == 2 * len(expected)
+
+
+def test_select_sample_files_not_found():
+    with pytest.raises(
+        ValueError, match="Available samples: \\['DY', 'TT'\\]"
+    ):
+        produce.select_sample_files(_metadata_samples(), "WJets")
+    with pytest.raises(ValueError, match="not found"):
+        produce.select_sample_files(_metadata_samples(), "DY", era="2023")
+
+
 def test_default_output_file():
     sample = produce.select_input_file(
         _metadata_samples(), "ntuples/2025/TT/et/f_1.root"

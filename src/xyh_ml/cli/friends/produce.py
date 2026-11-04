@@ -653,6 +653,12 @@ def select_input_file(
         raise ValueError(msg)
 
     sample, i = matches[0]
+    return _single_file_sample(sample, i)
+
+
+def _single_file_sample(sample: Sample, i: int) -> Sample:
+    """Copy of ``sample`` with only its ``i``-th main file and the
+    corresponding friend files."""
     return dataclasses.replace(
         sample,
         main_files=[sample.main_files[i]],
@@ -661,6 +667,41 @@ def select_input_file(
             for name, friend_file_list in sample.friend_files.items()
         },
     )
+
+
+def select_sample_files(
+    samples: list[Sample],
+    sample_name: str,
+    era: str | None = None,
+    channel: str | None = None,
+) -> list[Sample]:
+    """Return one single-file sample (see :func:`select_input_file`) for
+    every main file of the sample ``sample_name``.
+
+    The sample usually exists for several eras and channels in the metadata;
+    all of them are included unless ``era`` or ``channel`` restrict them.
+    """
+    selected = [
+        s
+        for s in samples
+        if s.sample == sample_name
+        and (era is None or s.era == era)
+        and (channel is None or s.channel == channel)
+    ]
+    if not selected:
+        available = sorted({s.sample for s in samples})
+        msg = (
+            f"Sample {sample_name} (era {era}, channel {channel}) not found "
+            + f"in the sample metadata. Available samples: {available}"
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    return [
+        _single_file_sample(s, i)
+        for s in selected
+        for i in range(len(s.main_files))
+    ]
 
 
 def default_output_file(output_dir: Path, sample: Sample) -> Path:
@@ -757,88 +798,156 @@ def produce_friend(
     return profiler
 
 
+def input_columns(cfg: DictConfig) -> list[str]:
+    """Columns to read from the ntuples: the event number and the input
+    variables that are part of the ntuples. The others (e.g. campaign) are
+    added during processing."""
+    return [EVENT_COLUMN_NAME] + [
+        v.name
+        for v in cfg.inputs.variables
+        if v.get("is_part_of_snapshot", True)
+    ]
+
+
+def load_models(
+    cfg: DictConfig, channel: str
+) -> tuple[dict[int, torch.nn.Module], dict[int, dict[str, dict[str, Any]]]]:
+    """Load the models and transformations of all folds trained for the
+    analysis ``channel``, which replaces ``mode.channel`` in the
+    interpolation of ``artifacts.training_dir``."""
+    cfg = OmegaConf.merge(cfg, {"mode": {"channel": channel}})
+    input_size = len(cfg.inputs.variables) + len(cfg.inputs.parameters)
+
+    models = {}
+    transformations = {}
+    for fold, training_dir in _fold_training_dirs(cfg).items():
+        models[fold], transformations[fold] = _load_fold_model(
+            training_dir,
+            input_size,
+            len(cfg.outputs.classes),
+            cfg.network,
+        )
+
+    # Initialize the evaluation device before profiling
+    _warm_up_models(models, input_size)
+
+    return models, transformations
+
+
+def _select_jobs(
+    cfg: DictConfig, samples: list[Sample]
+) -> list[tuple[Sample, Path]]:
+    """Single-file samples to process and their output files, either for
+    ``input_file`` or for all files of ``sample``."""
+    if (cfg.input_file is None) == (cfg.sample is None):
+        msg = "Exactly one of input_file and sample has to be set."
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if cfg.input_file is not None:
+        file_samples = [select_input_file(samples, cfg.input_file)]
+    else:
+        if cfg.output_file:
+            msg = (
+                "output_file can only be set together with input_file; the "
+                + "output files of a sample are placed in output_dir."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+        file_samples = select_sample_files(
+            samples, cfg.sample, era=cfg.era, channel=cfg.channel
+        )
+
+    return [
+        (
+            file_sample,
+            Path(cfg.output_file)
+            if cfg.output_file
+            else default_output_file(Path(cfg.output_dir), file_sample),
+        )
+        for file_sample in file_samples
+    ]
+
+
 @hydra.main(
     config_path=str(PROJECT_DIR / "config"),
     config_name="produce",
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Find the input file in the sample metadata. Done first to fail early.
+    # Find the input files in the sample metadata. Done first to fail early.
     samples = [Sample.from_dict(s) for s in load_json(Path(cfg.metadata_file))]
-    sample = select_input_file(samples, cfg.input_file)
+    jobs = _select_jobs(cfg, samples)
+    logger.info(f"Producing friends for {len(jobs)} input file(s)")
 
-    # The analysis channel is that of the input file. Set it in the
-    # configuration, so that the models trained for this channel are loaded
-    # (artifacts.training_dir is interpolated from mode.channel). mode.channel
-    # always has a default value, so a different value is only logged.
-    if cfg.mode.channel != sample.channel:
-        logger.info(
-            f"Using channel {sample.channel} of input file {cfg.input_file} "
-            + f"instead of mode.channel={cfg.mode.channel}."
-        )
-    cfg = OmegaConf.merge(cfg, {"mode": {"channel": sample.channel}})
-    logger.info(
-        f"Producing friend for sample {sample.sample}, era {sample.era}, "
-        + f"channel {sample.channel}"
-    )
+    # Skip input files whose friend file exists already. Friend files are
+    # only moved to their output path when complete.
+    if cfg.skip_existing:
+        existing = [job for job in jobs if job[1].exists()]
+        for sample, output_file in existing:
+            logger.info(
+                f"Skipping {sample.main_files[0]}: {output_file} exists"
+            )
+        jobs = [job for job in jobs if not job[1].exists()]
 
-    # Output file, by default following the CROWN friend directory layout
-    if cfg.output_file:
-        output_file = Path(cfg.output_file)
-    else:
-        output_file = default_output_file(Path(cfg.output_dir), sample)
-
-    # Only variables that are part of the ntuples can be read from the files;
-    # the others (e.g. campaign) are added during processing
-    columns = [EVENT_COLUMN_NAME] + [
-        v.name
-        for v in cfg.inputs.variables
-        if v.get("is_part_of_snapshot", True)
-    ]
-
-    # Get the models and transformations for all folds
-    models = {}
-    transformations = {}
-    for fold, training_dir in _fold_training_dirs(cfg).items():
-        models[fold], transformations[fold] = _load_fold_model(
-            training_dir,
-            len(cfg.inputs.variables) + len(cfg.inputs.parameters),
-            len(cfg.outputs.classes),
-            cfg.network,
-        )
-
-    # Initialize the evaluation device before profiling
-    _warm_up_models(
-        models, len(cfg.inputs.variables) + len(cfg.inputs.parameters)
-    )
+    # The analysis channel is that of the input file; load the models trained
+    # for every channel that occurs (mode.channel is not used)
+    channels = sorted({sample.channel for sample, _ in jobs})
+    models = {channel: load_models(cfg, channel) for channel in channels}
 
     # Track the memory usage of the friend production only, not of the
     # loading of the configuration and the models
     profiler = Profiler()
     profiler.start_memory_tracking()
 
-    produce_friend(
-        sample,
-        output_file,
-        columns,
-        campaign_name(cfg.campaigns, sample.era),
-        cfg.inputs.variables,
-        cfg.inputs.parameters,
-        cfg.outputs.variables[0],
-        cfg.outputs.classes,
-        pd.DataFrame.from_records(cfg.parameter_values),
-        models,
-        transformations,
-        cfg.mode.n_folds,
-        cfg.training.batch_size,
-        cfg.chunk_size,
-        profiler=profiler,
-    )
+    parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
+    columns = input_columns(cfg)
+    failed = []
+    for i, (sample, output_file) in enumerate(jobs, start=1):
+        logger.info(
+            f"[{i}/{len(jobs)}] Sample {sample.sample}, era {sample.era}, "
+            + f"channel {sample.channel}: {sample.main_files[0]}"
+        )
+        fold_models, fold_transformations = models[sample.channel]
+        try:
+            produce_friend(
+                sample,
+                output_file,
+                columns,
+                campaign_name(cfg.campaigns, sample.era),
+                cfg.inputs.variables,
+                cfg.inputs.parameters,
+                cfg.outputs.variables[0],
+                cfg.outputs.classes,
+                parameter_values,
+                fold_models,
+                fold_transformations,
+                cfg.mode.n_folds,
+                cfg.training.batch_size,
+                cfg.chunk_size,
+                profiler=profiler,
+            )
+        except Exception:
+            # Continue with the other files and report the failures at the
+            # end
+            logger.exception(
+                f"Failed to produce friend for {sample.main_files[0]}"
+            )
+            failed.append(sample.main_files[0])
 
-    # Report time per event and per row and the memory usage
+    # Report time per event and per row and the memory usage, summed over
+    # all files
     profiler.log_summary()
     if cfg.profile_file:
         profiler.dump(Path(cfg.profile_file))
+
+    logger.info(
+        f"Produced {len(jobs) - len(failed)} of {len(jobs)} friend file(s)"
+    )
+    if failed:
+        msg = f"Failed to produce friends for {len(failed)} file(s): {failed}"
+        logger.error(msg)
+        raise RuntimeError(msg)
 
 
 if __name__ == "__main__":

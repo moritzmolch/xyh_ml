@@ -18,12 +18,27 @@ defaults:
 
 metadata_file: data/output/friends/${ntuple.tag}/metadata/metadata.json.gz
 
-# Main ntuple file to produce the friend file for. Must be one of the main
-# files in the metadata file, given either as full path (including the XRootD
-# server) or as a trailing part of it that matches exactly one main file. The
-# analysis channel is taken from the sample of the file and replaces
-# `mode.channel`, so that the models trained for this channel are loaded.
-input_file: ???
+# Input files to produce friend files for; set exactly one of `input_file` and
+# `sample`. One friend file is produced per input file.
+#
+# `input_file`: a single main ntuple file. Must be one of the main files in the
+# metadata file, given either as full path (including the XRootD server) or as
+# a trailing part of it that matches exactly one main file.
+#
+# `sample`: name of a sample in the metadata file; all its main files are
+# processed, for all eras and channels unless restricted by `era` and
+# `channel`.
+#
+# The analysis channel is taken from the sample of each file (`mode.channel`
+# is not used), so that the models trained for this channel are loaded.
+input_file: null
+sample: null
+era: null
+channel: null
+
+# Skip input files whose friend file exists already (friend files are only
+# written to their final path when complete)
+skip_existing: false
 
 # Name of the friend. By default, the output file is written to
 # <output_dir>/<era>/<sample>/<channel>/<file name of the input file>,
@@ -31,7 +46,8 @@ input_file: ???
 friend_name: pnn-${tags.training_tag}-${mode.decay_mode}
 output_dir: data/output/friends/${ntuple.tag}/CROWNFriend/${friend_name}
 
-# Explicit output file, overrides the default path derived from `output_dir`
+# Explicit output file, overrides the default path derived from `output_dir`.
+# Only possible together with `input_file`.
 output_file: null
 
 # Optional JSON file for the profile of the friend production (time per stage
