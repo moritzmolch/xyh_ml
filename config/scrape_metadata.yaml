@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Default configuration for the training
+# Default configuration for the scraping of the sample metadata
 # -----------------------------------------------------------------------------
 
 defaults:
@@ -17,7 +17,8 @@ defaults:
 - inputs: y2b_h2tau
 - _self_
 
-metadata_file: data/output/friends/${ntuple.tag}/metadata/metadata.json.gz
+# One file per sample: <metadata_dir>/<era>/<sample>.json.gz
+metadata_dir: data/output/friends/${ntuple.tag}/metadata
 
 
 # -----------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 """End-to-end tests of the friend production script with the real
 ``produce`` configuration and small models stored like training artifacts."""
 
-import dataclasses
 import json
 from pathlib import Path
 
@@ -16,8 +15,10 @@ from omegaconf import OmegaConf
 from xyh_ml import PROJECT_DIR
 from xyh_ml.cli.friends import produce
 from xyh_ml.data.transformations import derive_transformations
+from xyh_ml.friend_production import paths
 from xyh_ml.friend_production.dataclasses import Sample
-from xyh_ml.io import dump_json, dump_transformations
+from xyh_ml.friend_production.metadata import write_sample_metadata
+from xyh_ml.io import dump_transformations
 from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 
 N_EVENTS = 7
@@ -49,10 +50,10 @@ def _main_file(tmp_path, era, sample, channel, name):
 
 @pytest.fixture
 def setup(tmp_path):
-    """Compose the produce config pointing to temporary main files, a
-    metadata file and training artifacts of two folds for the channels et
-    and mt. The config selects the input file DY/et/f_0.root."""
-    output_file = tmp_path / "friend" / "f_0.root"
+    """Compose the produce config pointing to temporary main files, metadata
+    files and training artifacts of two folds for the channels et and mt. The
+    config selects the input file DY/et/f_0.root."""
+    output_file = tmp_path / "friends" / "2024" / "DY" / "et" / "f_0.root"
 
     with initialize_config_dir(
         str(PROJECT_DIR / "config"), version_base="1.3"
@@ -60,10 +61,11 @@ def setup(tmp_path):
         cfg = compose(
             "produce",
             overrides=[
-                f"metadata_file={tmp_path / 'metadata.json'}",
-                "input_file="
-                + _main_file(tmp_path, "2024", "DY", "et", "f_0.root"),
-                f"output_file={output_file}",
+                f"metadata_dir={tmp_path / 'metadata'}",
+                "input_files=["
+                + _main_file(tmp_path, "2024", "DY", "et", "f_0.root")
+                + "]",
+                f"output_dir={tmp_path / 'friends'}",
                 "artifacts.training_dir="
                 + str(tmp_path / "training")
                 + "/fold${mode.fold}of${mode.n_folds}/${mode.channel}",
@@ -91,10 +93,11 @@ def setup(tmp_path):
         samples.setdefault(
             (era, sample, channel), Sample(era, sample, channel, [], {}, [])
         ).main_files.append(path)
-    dump_json(
-        tmp_path / "metadata.json",
-        [dataclasses.asdict(s) for s in samples.values()],
-    )
+    by_sample = {}
+    for record in samples.values():
+        by_sample.setdefault((record.era, record.sample), []).append(record)
+    for (era, sample), records in by_sample.items():
+        write_sample_metadata(tmp_path / "metadata", era, sample, records)
 
     # Training artifacts of every fold and channel
     rng = np.random.default_rng(0)
@@ -145,14 +148,17 @@ def setup(tmp_path):
     return cfg, output_file
 
 
-def _sample_mode(cfg, tmp_path, **selection):
-    """Switch the config from input_file to sample mode."""
-    cfg.input_file = None
-    cfg.output_file = None
-    cfg.output_dir = str(tmp_path / "friends")
-    for key, value in selection.items():
-        cfg[key] = value
+def _select(cfg, tmp_path, *files):
+    """Select input files given as (sample, channel, file name)."""
+    cfg.input_files = [
+        _main_file(tmp_path, "2024", sample, channel, name)
+        for sample, channel, name in files
+    ]
     return cfg
+
+
+DY_ET = [("DY", "et", "f_0.root"), ("DY", "et", "f_1.root")]
+ALL_DY = [*DY_ET, ("DY", "mt", "f_0.root")]
 
 
 def _friend_arrays(path):
@@ -209,19 +215,6 @@ def test_main_writes_profile(setup, tmp_path):
     assert profile["memory"]["rss_peak_bytes"] > 0
 
 
-def test_main_default_output_file(setup, tmp_path):
-    cfg, _ = setup
-    cfg.output_file = None
-    cfg.output_dir = str(tmp_path / "friends")
-
-    produce.main(cfg)
-
-    with uproot.open(
-        tmp_path / "friends" / "2024" / "DY" / "et" / "f_0.root"
-    ) as f:
-        assert f["ntuple"].num_entries == N_EVENTS
-
-
 @pytest.mark.parametrize("channel", ["mt", "tt"])
 def test_main_infers_channel_from_input_file(setup, channel):
     cfg, output_file = setup
@@ -238,29 +231,57 @@ def test_main_infers_channel_from_input_file(setup, channel):
         np.testing.assert_array_equal(result[key], value)
 
 
-def test_main_infers_channel_for_default_output_file(setup, tmp_path):
-    cfg, _ = setup
+def test_main_infers_channel_for_output_file(setup, tmp_path):
+    cfg, output_file = setup
     cfg.mode.channel = "mt"
-    cfg.output_file = None
-    cfg.output_dir = str(tmp_path / "friends")
 
     produce.main(cfg)
 
-    assert (tmp_path / "friends" / "2024" / "DY" / "et" / "f_0.root").exists()
+    assert output_file.exists()
     assert not (tmp_path / "friends" / "2024" / "DY" / "mt").exists()
 
 
-def test_main_unknown_input_file_fails_before_loading_models(setup):
+def test_main_unknown_input_file_fails_before_loading_models(setup, tmp_path):
+    """All paths are checked before any work starts, also if an earlier file
+    is fine."""
     cfg, output_file = setup
-    cfg.input_file = "ntuples/2024/DY/et/f_9.root"
+    _select(cfg, tmp_path, ("DY", "et", "f_0.root"), ("DY", "et", "f_9.root"))
     # Point the models to a missing directory: the input file lookup has to
     # fail before any model is loaded
     cfg.artifacts.training_dir = "/nonexistent"
 
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(ValueError, match="f_9.root not found"):
         produce.main(cfg)
 
     assert not output_file.exists()
+
+
+def test_main_trailing_path_of_input_file(setup):
+    cfg, output_file = setup
+    cfg.input_files = ["2024/DY/et/f_0.root"]
+
+    produce.main(cfg)
+
+    assert output_file.exists()
+
+
+def test_main_missing_metadata_file_points_to_scraper(setup, tmp_path):
+    cfg, _ = setup
+    _select(cfg, tmp_path, ("ZZ", "et", "f_0.root"))
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="scrape_metadata"):
+        produce.main(cfg)
+
+
+@pytest.mark.parametrize("input_files", [[], "", ["f_0.root"]])
+def test_main_invalid_input_files(setup, input_files):
+    cfg, _ = setup
+    cfg.input_files = input_files
+    cfg.artifacts.training_dir = "/nonexistent"
+
+    with pytest.raises(ValueError, match="input_files is empty|does not have"):
+        produce.main(cfg)
 
 
 def test_produce_config_defaults():
@@ -269,12 +290,12 @@ def test_produce_config_defaults():
     ):
         cfg = compose("produce")
 
-    assert cfg.input_file is None
-    assert cfg.sample is None
-    assert cfg.campaign is None
-    assert cfg.channel is None
+    assert list(cfg.input_files) == []
     assert cfg.skip_existing is False
-    assert cfg.output_file is None
+    assert cfg.status_file is None
+    for removed in ["input_file", "sample", "campaign", "channel"]:
+        assert removed not in cfg
+    assert "output_file" not in cfg
     assert cfg.chunk_size > 0
     assert cfg.output_dir.endswith(f"CROWNFriend/{cfg.friend_name}")
     assert cfg.friend_name == (
@@ -282,28 +303,56 @@ def test_produce_config_defaults():
     )
 
 
-# ---------------------------------------------------------------- sample mode
+def test_produce_config_input_files_from_command_line():
+    """A list of URLs is accepted, as produce_many passes them."""
+    urls = [
+        "root://server:1094//store/2024/A=1/et/f_0.root",
+        "root://server:1094//store/2024/B,2/et/f_1.root",
+    ]
+    quoted = ",".join(f"'{u}'" for u in urls)
+    with initialize_config_dir(
+        str(PROJECT_DIR / "config"), version_base="1.3"
+    ):
+        cfg = compose("produce", overrides=[f"input_files=[{quoted}]"])
+
+    assert list(cfg.input_files) == urls
 
 
-def test_main_sample_processes_all_files_of_all_channels(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY")
+# ------------------------------------------------------ several input files
+
+
+def test_main_processes_all_input_files(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *ALL_DY, ("TT", "et", "f_0.root"))
 
     produce.main(cfg)
 
-    friends = tmp_path / "friends" / "2024" / "DY"
+    friends = tmp_path / "friends" / "2024"
     assert sorted(
         str(p.relative_to(friends)) for p in friends.rglob("*.root")
-    ) == ["et/f_0.root", "et/f_1.root", "mt/f_0.root"]
+    ) == [
+        "DY/et/f_0.root",
+        "DY/et/f_1.root",
+        "DY/mt/f_0.root",
+        "TT/et/f_0.root",
+    ]
     for (era, sample, channel, name), n in MAIN_FILES.items():
-        if sample == "DY":
-            arrays = _friend_arrays(friends / channel / name)
-            assert len(arrays["max_score_m_x_400_m_y_100"]) == n
-    # Other samples are not processed
-    assert not (tmp_path / "friends" / "2024" / "TT").exists()
+        arrays = _friend_arrays(friends / sample / channel / name)
+        assert len(arrays["max_score_m_x_400_m_y_100"]) == n
 
 
-def test_main_sample_uses_models_of_the_file_channel(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY")
+def test_main_only_processes_selected_files(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, ("DY", "et", "f_1.root"))
+
+    produce.main(cfg)
+
+    friends = tmp_path / "friends" / "2024"
+    assert [str(p.relative_to(friends)) for p in friends.rglob("*.root")] == [
+        "DY/et/f_1.root"
+    ]
+
+
+def test_main_uses_models_of_the_file_channel(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *ALL_DY)
 
     produce.main(cfg)
 
@@ -315,47 +364,34 @@ def test_main_sample_uses_models_of_the_file_channel(setup, tmp_path):
         et["max_score_m_x_400_m_y_100"], mt["max_score_m_x_400_m_y_100"]
     )
 
-    # The et friend equals the one of the single-file mode
-    cfg_single, output_file = setup
-    cfg_single.input_file = _main_file(
-        tmp_path, "2024", "DY", "et", "f_0.root"
-    )
-    cfg_single.sample = None
-    cfg_single.output_file = str(output_file)
-    produce.main(cfg_single)
-    single = _friend_arrays(output_file)
+    # The et friend equals the one of a job with this file only
+    cfg = _select(cfg, tmp_path, ("DY", "et", "f_0.root"))
+    produce.main(cfg)
+    single = _friend_arrays(friends / "et" / "f_0.root")
     for key, value in single.items():
         np.testing.assert_array_equal(et[key], value)
 
 
-@pytest.mark.parametrize(
-    "selection, expected",
-    [
-        ({"channel": "mt"}, ["mt/f_0.root"]),
-        (
-            {"campaign": "2024_nano_v15", "channel": "et"},
-            ["et/f_0.root", "et/f_1.root"],
-        ),
-        (
-            {"campaign": ["2024_nano_v15"], "channel": ["et", "mt"]},
-            ["et/f_0.root", "et/f_1.root", "mt/f_0.root"],
-        ),
-    ],
-)
-def test_main_sample_restricted(setup, tmp_path, selection, expected):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY", **selection)
+def test_main_only_loads_models_of_the_channels_that_occur(
+    setup, tmp_path, monkeypatch
+):
+    cfg = _select(setup[0], tmp_path, *DY_ET)
+    load_models = produce.load_models
+    loaded = []
+
+    def recording_load_models(cfg, channel):
+        loaded.append(channel)
+        return load_models(cfg, channel)
+
+    monkeypatch.setattr(produce, "load_models", recording_load_models)
 
     produce.main(cfg)
 
-    friends = tmp_path / "friends" / "2024" / "DY"
-    assert (
-        sorted(str(p.relative_to(friends)) for p in friends.rglob("*.root"))
-        == expected
-    )
+    assert loaded == ["et"]
 
 
-def test_main_sample_profile_sums_over_files(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+def test_main_profile_sums_over_files(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *DY_ET)
     cfg.profile_file = str(tmp_path / "profile.json")
 
     produce.main(cfg)
@@ -368,8 +404,8 @@ def test_main_sample_profile_sums_over_files(setup, tmp_path):
     assert profile["n_chunks"] == 5
 
 
-def test_main_sample_skip_existing(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+def test_main_skip_existing(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *DY_ET)
     produce.main(cfg)
     friends = tmp_path / "friends" / "2024" / "DY" / "et"
     # Mark the existing friend of f_0 and remove the one of f_1
@@ -377,6 +413,7 @@ def test_main_sample_skip_existing(setup, tmp_path):
     (friends / "f_1.root").unlink()
 
     cfg.skip_existing = True
+    cfg.status_file = str(tmp_path / "status" / "job.json")
     produce.main(cfg)
 
     assert (friends / "f_0.root").read_bytes() == b"existing"
@@ -384,10 +421,34 @@ def test_main_sample_skip_existing(setup, tmp_path):
         len(_friend_arrays(friends / "f_1.root")["max_score_m_x_400_m_y_100"])
         == 4
     )
+    status = json.loads((tmp_path / "status" / "job.json").read_text())
+    assert status == {
+        "produced": [cfg.input_files[1]],
+        "skipped": [cfg.input_files[0]],
+        "failed": [],
+    }
 
 
-def test_main_sample_overwrites_without_skip_existing(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+def test_main_only_existing_friends_does_not_load_models(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *DY_ET)
+    produce.main(cfg)
+
+    # Loading models would fail
+    cfg.artifacts.training_dir = "/nonexistent"
+    cfg.skip_existing = True
+    cfg.status_file = str(tmp_path / "status.json")
+    produce.main(cfg)
+
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status == {
+        "produced": [],
+        "skipped": list(cfg.input_files),
+        "failed": [],
+    }
+
+
+def test_main_overwrites_without_skip_existing(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *DY_ET)
     friends = tmp_path / "friends" / "2024" / "DY" / "et"
     friends.mkdir(parents=True)
     (friends / "f_0.root").write_bytes(b"existing")
@@ -400,8 +461,9 @@ def test_main_sample_overwrites_without_skip_existing(setup, tmp_path):
     )
 
 
-def test_main_sample_continues_after_failure(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY", channel="et")
+def test_main_continues_after_failure_and_reports_status(setup, tmp_path):
+    cfg = _select(setup[0], tmp_path, *DY_ET)
+    cfg.status_file = str(tmp_path / "status.json")
     # Corrupt the first input file
     broken = _main_file(tmp_path, "2024", "DY", "et", "f_0.root")
     Path(broken).write_bytes(b"not a ROOT file")
@@ -416,89 +478,12 @@ def test_main_sample_continues_after_failure(setup, tmp_path):
         len(_friend_arrays(friends / "f_1.root")["max_score_m_x_400_m_y_100"])
         == 4
     )
-
-
-def test_produce_config_campaign_and_channel_from_command_line():
-    with initialize_config_dir(
-        str(PROJECT_DIR / "config"), version_base="1.3"
-    ):
-        single = compose(
-            "produce", overrides=["campaign=2024_nano_v15", "channel=mt"]
-        )
-        several = compose(
-            "produce",
-            overrides=[
-                "campaign=[2022_pre_ee_nano_v12,2024_nano_v15]",
-                "channel=[et,tt]",
-            ],
-        )
-
-    assert produce._as_list(single.campaign) == ["2024_nano_v15"]
-    assert produce._as_list(single.channel) == ["mt"]
-    assert produce.campaign_eras(
-        single.campaigns, produce._as_list(several.campaign)
-    ) == ["2022preEE", "2024"]
-    assert produce._as_list(several.channel) == ["et", "tt"]
-
-
-def test_main_sample_campaign_not_in_metadata(setup, tmp_path):
-    cfg = _sample_mode(
-        setup[0], tmp_path, sample="DY", campaign="2025_nano_v15"
-    )
-    cfg.artifacts.training_dir = "/nonexistent"
-
-    with pytest.raises(ValueError, match="Sample DY .* not found"):
-        produce.main(cfg)
-
-
-def test_main_sample_unknown_campaign(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="DY", campaign="2024")
-    cfg.artifacts.training_dir = "/nonexistent"
-
-    with pytest.raises(ValueError, match="Unknown campaigns"):
-        produce.main(cfg)
-
-
-@pytest.mark.parametrize(
-    "selection", [{"campaign": "2024_nano_v15"}, {"channel": "et"}]
-)
-def test_main_input_file_with_campaign_or_channel(setup, selection):
-    cfg, _ = setup
-    for key, value in selection.items():
-        cfg[key] = value
-    cfg.artifacts.training_dir = "/nonexistent"
-
-    with pytest.raises(ValueError, match="can not be set together"):
-        produce.main(cfg)
-
-
-def test_main_sample_not_found(setup, tmp_path):
-    cfg = _sample_mode(setup[0], tmp_path, sample="WJets")
-    cfg.artifacts.training_dir = "/nonexistent"
-
-    with pytest.raises(ValueError, match="Sample WJets .* not found"):
-        produce.main(cfg)
-
-
-@pytest.mark.parametrize(
-    "input_file, sample, output_file, match",
-    [
-        (None, None, None, "Exactly one of input_file and sample"),
-        ("x.root", "DY", None, "Exactly one of input_file and sample"),
-        (None, "DY", "out.root", "output_file can only be set"),
-    ],
-)
-def test_main_invalid_input_selection(
-    setup, input_file, sample, output_file, match
-):
-    cfg, _ = setup
-    cfg.input_file = input_file
-    cfg.sample = sample
-    cfg.output_file = output_file
-    cfg.artifacts.training_dir = "/nonexistent"
-
-    with pytest.raises(ValueError, match=match):
-        produce.main(cfg)
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status == {
+        "produced": [cfg.input_files[1]],
+        "skipped": [],
+        "failed": [broken],
+    }
 
 
 # ------------------------------------------------------- upload to XRootD
@@ -529,13 +514,13 @@ def fake_remote(tmp_path, monkeypatch):
 
     monkeypatch.setattr(produce, "xrd_upload", upload)
     monkeypatch.setattr(
-        produce, "xrd_exists", lambda url: local_path(url).exists()
+        paths, "xrd_exists", lambda url: local_path(url).exists()
     )
     return remote_dir, uploads
 
 
-def _remote_mode(cfg, tmp_path, **selection):
-    cfg = _sample_mode(cfg, tmp_path, **selection)
+def _remote_mode(cfg, tmp_path, *files):
+    cfg = _select(cfg, tmp_path, *files)
     cfg.nn_friend_tag = "pnn-test"
     cfg.ntuple.xrootd_server = REMOTE
     cfg.ntuple.base_dir = "/store/user/me/ntuples"
@@ -555,7 +540,7 @@ def _remote_friends(remote_dir, cfg):
 
 def test_main_uploads_friends_with_nn_friend_tag(setup, tmp_path, fake_remote):
     remote_dir, uploads = fake_remote
-    cfg = _remote_mode(setup[0], tmp_path, sample="DY")
+    cfg = _remote_mode(setup[0], tmp_path, *ALL_DY)
 
     produce.main(cfg)
 
@@ -570,9 +555,8 @@ def test_main_uploads_friends_with_nn_friend_tag(setup, tmp_path, fake_remote):
     assert list((tmp_path / "staging").iterdir()) == []
 
     # The uploaded friend equals the locally written one
-    local_cfg = _sample_mode(setup[0], tmp_path, sample="DY")
-    local_cfg.nn_friend_tag = None
-    produce.main(local_cfg)
+    cfg.nn_friend_tag = None
+    produce.main(cfg)
     local = _friend_arrays(tmp_path / "friends/2024/DY/et/f_0.root")
     remote = _friend_arrays(friends / "et" / "f_0.root")
     for key, value in local.items():
@@ -581,7 +565,7 @@ def test_main_uploads_friends_with_nn_friend_tag(setup, tmp_path, fake_remote):
 
 def test_main_upload_skip_existing_checks_remote(setup, tmp_path, fake_remote):
     remote_dir, uploads = fake_remote
-    cfg = _remote_mode(setup[0], tmp_path, sample="DY", channel="et")
+    cfg = _remote_mode(setup[0], tmp_path, *DY_ET)
     existing = _remote_friends(remote_dir, cfg) / "2024/DY/et/f_0.root"
     existing.parent.mkdir(parents=True)
     existing.write_bytes(b"old")
@@ -607,22 +591,13 @@ def test_main_upload_failure_continues_and_cleans_up(
         upload(local_file, url)
 
     monkeypatch.setattr(produce, "xrd_upload", failing_upload)
-    cfg = _remote_mode(setup[0], tmp_path, sample="DY")
+    cfg = _remote_mode(setup[0], tmp_path, *ALL_DY)
 
     with pytest.raises(RuntimeError, match="1 file"):
         produce.main(cfg)
 
     assert len(uploads) == 2
     assert list((tmp_path / "staging").iterdir()) == []
-
-
-def test_main_nn_friend_tag_with_output_file(setup):
-    cfg, _ = setup
-    cfg.nn_friend_tag = "pnn-test"
-    cfg.artifacts.training_dir = "/nonexistent"
-
-    with pytest.raises(ValueError, match="output_file can not be set"):
-        produce.main(cfg)
 
 
 def test_produce_config_nn_friend_tag_from_command_line():

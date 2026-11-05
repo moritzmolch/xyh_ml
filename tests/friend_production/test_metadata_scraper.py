@@ -4,10 +4,14 @@ import pytest
 from hydra import compose, initialize_config_dir
 
 from xyh_ml import PROJECT_DIR
-from xyh_ml.config.dataclasses import Campaign, Channel, Friend
+from xyh_ml.cli.friends import scrape_metadata as cli
+from xyh_ml.config.dataclasses import Campaign, Friend
 from xyh_ml.friend_production import scraper as ms
 from xyh_ml.friend_production.dataclasses import Sample, Shift, Variable
-from xyh_ml.friend_production.xrootd import DirectoryNotFoundError
+from xyh_ml.friend_production.metadata import (
+    load_sample_metadata,
+    metadata_path,
+)
 
 # ---------------------------------------------------------------- get_shifts
 
@@ -157,222 +161,161 @@ def test_get_shifts_groups_unshifted_columns_as_nominal(make_root_file):
     assert [v.name for v in shifts["jesUp"].variables] == ["pt_1"]
 
 
-# ----------------------------------------------------------- scrape_metadata
+# ------------------------------------------------------------ friend_applies
+
+C18 = Campaign(name="c18", era="2018")
+C22 = Campaign(name="c22", era="2022")
+ROOT = "root://server.example:1094/"
 
 
-class Recorder:
-    """Patch the get_* helpers used by scrape_metadata."""
+@pytest.mark.parametrize(
+    "friend, expected",
+    [
+        (Friend(name="fr"), True),
+        (Friend(name="fr", include_channels=["et"]), True),
+        (Friend(name="fr", include_channels=["mt"]), False),
+        (Friend(name="fr", exclude_channels=["et"]), False),
+        (Friend(name="fr", exclude_channels=["mt"]), True),
+        (Friend(name="fr", include_campaigns=["c18"]), True),
+        (Friend(name="fr", include_campaigns=["c22"]), False),
+        (Friend(name="fr", exclude_campaigns=["c18"]), False),
+        (Friend(name="fr", exclude_campaigns=["c22"]), True),
+        (Friend(name="fr", include_samples=["^TT"]), True),
+        (Friend(name="fr", include_samples=["^DY"]), False),
+        (Friend(name="fr", exclude_samples=["^TT"]), False),
+        (Friend(name="fr", exclude_samples=["^DY"]), True),
+    ],
+)
+def test_friend_applies(friend, expected):
+    assert ms.friend_applies(friend, "c18", "et", "TT_2018") is expected
 
-    def __init__(
-        self,
-        monkeypatch,
-        eras,
-        samples,
-        channels,
-        files=None,
-        friend_files=None,
-    ):
-        """``files`` maps a channel directory to its main files (default:
-        ``m.root``). Friend files have the same file names as the main
-        files, unless ``friend_files`` maps ``(friend, era, sample,
-        channel)`` to other files, or to ``None`` for a missing directory.
-        """
-        self.friend_calls = []
-        self.shift_calls = []
-        files = files or {}
-        friend_files = friend_files or {}
 
-        def main_files(d):
-            return files.get(d, [f"{d}/m.root"])
+# ------------------------------------------------------------- scrape_sample
 
-        monkeypatch.setattr(
-            ms,
-            "get_era_dirs",
-            lambda fs, d: {e: f"{d}/CROWNRun/{e}" for e in eras},
-        )
-        monkeypatch.setattr(
-            ms,
-            "get_sample_dirs",
-            lambda fs, d: {s: f"{d}/{s}" for s in samples},
-        )
-        monkeypatch.setattr(
-            ms,
-            "get_channel_dirs",
-            lambda fs, d: {c: f"{d}/{c}" for c in channels},
-        )
-        monkeypatch.setattr(ms, "get_files", lambda fs, d: main_files(d))
 
-        def get_friend_files(fs, base, tag, friend, era, sample, channel):
-            self.friend_calls.append((base, tag, friend, era, sample, channel))
-            key = (friend, era, sample, channel)
-            if key in friend_files:
-                if friend_files[key] is None:
-                    raise DirectoryNotFoundError(f"no such dir for {key}")
-                return friend_files[key]
-            main_dir = f"{base}/{tag}/CROWNRun/{era}/{sample}/{channel}"
-            friend_dir = f"{base}/{tag}/CROWNFriend/{friend}/{era}/{sample}"
-            return [
-                f.replace(main_dir, f"{friend_dir}/{channel}")
-                for f in main_files(main_dir)
-            ]
+def _main_dir(sample="A", channel="et", era="2018"):
+    return f"/base/tag/CROWNRun/{era}/{sample}/{channel}"
 
-        monkeypatch.setattr(ms, "get_friend_files", get_friend_files)
 
-        def get_shifts(main, friend):
-            self.shift_calls.append((main, friend))
-            return []
-
-        monkeypatch.setattr(ms, "get_shifts", get_shifts)
+def _friend_dir(friend="fr", sample="A", channel="et", era="2018"):
+    return f"/base/tag/CROWNFriend/{friend}/{era}/{sample}/{channel}"
 
 
 @pytest.fixture
-def recorder(monkeypatch):
-    def factory(eras=("2018",), samples=("A",), channels=("et",), **kw):
-        return Recorder(monkeypatch, eras, samples, channels, **kw)
-
-    return factory
+def no_shifts(monkeypatch):
+    monkeypatch.setattr(ms, "get_shifts", lambda main, friends: [])
 
 
-CAMPAIGNS = [
-    Campaign(name="c18", era="2018"),
-    Campaign(name="c22", era="2022"),
-]
-
-
-CHANNELS = [Channel(name="et"), Channel(name="mt"), Channel(name="tt")]
-
-
-def run(friends=(), campaigns=CAMPAIGNS, channels=CHANNELS, samples=None):
-    return ms.scrape_metadata(
-        None, "/base", "tag", list(friends), campaigns, channels, samples
+def _scrape(fs, friends=(), campaign=C18, sample="A", channels=("et",)):
+    return ms.scrape_sample(
+        fs, "/base", "tag", list(friends), campaign, sample, list(channels)
     )
 
 
-def test_scrape_metadata_builds_sample_object(recorder):
-    rec = recorder(eras=["2018"], samples=["A"], channels=["et"])
-    result = run(friends=[Friend(name="fr")])
-    assert len(result) == 1
-    (sample,) = result
-    assert isinstance(sample, Sample)
-    assert sample.era == "2018"
-    assert sample.sample == "A"
-    assert sample.channel == "et"
-    assert sample.main_files == ["/base/tag/CROWNRun/2018/A/et/m.root"]
-    assert sample.friend_files == {
-        "fr": ["/base/tag/CROWNFriend/fr/2018/A/et/m.root"]
-    }
-    assert rec.friend_calls == [("/base", "tag", "fr", "2018", "A", "et")]
-    assert sample.shifts == []
-    assert rec.shift_calls == [(sample.main_files, sample.friend_files)]
+def test_scrape_sample_builds_records(fake_fs_factory, monkeypatch):
+    shift_calls = []
 
+    def get_shifts(main, friends):
+        shift_calls.append((main, friends))
+        return [Shift(name="nominal", variables=[])]
 
-def test_scrape_metadata_covers_all_eras_and_samples(recorder):
-    recorder(eras=["2018", "2022"], samples=["A", "B"], channels=["et"])
-    result = run()
-    assert [(s.era, s.sample) for s in result] == [
-        ("2018", "A"),
-        ("2018", "B"),
-        ("2022", "A"),
-        ("2022", "B"),
-    ]
-
-
-def test_scrape_metadata_without_friends_has_empty_friend_files(recorder):
-    recorder()
-    assert run()[0].friend_files == {}
-
-
-def test_scrape_metadata_with_real_dict_returning_helpers(
-    monkeypatch, fake_fs_factory
-):
+    monkeypatch.setattr(ms, "get_shifts", get_shifts)
     fs = fake_fs_factory(
         {
-            "/base/tag/CROWNRun": ["2018"],
-            "/base/tag/CROWNRun/2018": ["A"],
-            "/base/tag/CROWNRun/2018/A": ["et"],
-            "/base/tag/CROWNRun/2018/A/et": ["x.root"],
+            _main_dir(channel="et"): ["1.root", "log.txt"],
+            _main_dir(channel="mt"): ["2.root"],
+            _friend_dir(channel="et"): ["1.root"],
+            _friend_dir(channel="mt"): ["2.root"],
         }
     )
-    monkeypatch.setattr(ms, "get_shifts", lambda m, f: [])
-    result = ms.scrape_metadata(fs, "/base", "tag", [], CAMPAIGNS, CHANNELS)
-    assert [s.sample for s in result] == ["A"]
-    assert result[0].main_files == [
-        "root://server.example:1094//base/tag/CROWNRun/2018/A/et/x.root"
-    ]
+
+    et, mt = _scrape(fs, [Friend(name="fr")], channels=["et", "mt"])
+
+    assert isinstance(et, Sample)
+    assert (et.era, et.sample, et.channel) == ("2018", "A", "et")
+    assert et.main_files == [f"{ROOT}{_main_dir()}/1.root"]
+    assert et.friend_files == {"fr": [f"{ROOT}{_friend_dir()}/1.root"]}
+    assert et.shifts == [Shift(name="nominal", variables=[])]
+    assert mt.channel == "mt"
+    assert shift_calls[0] == (et.main_files, et.friend_files)
 
 
-def test_scrape_metadata_era_not_in_campaigns_is_skipped(recorder, caplog):
-    recorder(eras=["2018", "2022"])
-    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
-        result = run(campaigns=[CAMPAIGNS[0]])
-    assert [s.era for s in result] == ["2018"]
-    assert "Folder '2022' ignored" in caplog.text
-
-
-def test_scrape_metadata_channel_not_in_channels_is_skipped(recorder, caplog):
-    rec = recorder(samples=["A"], channels=["em", "et", "mt"])
-    with caplog.at_level(logging.INFO, logger=ms.logger.name):
-        result = run(
-            friends=[Friend(name="fr")],
-            channels=[Channel(name="et"), Channel(name="mt")],
-        )
-    assert [s.channel for s in result] == ["et", "mt"]
-    assert "Skipping channel em of sample A (2018)" in caplog.text
-    # Neither files nor shifts are looked up for the skipped channel
-    assert [c[-1] for c in rec.friend_calls] == ["et", "mt"]
-    assert len(rec.shift_calls) == 2
-
-
-def test_scrape_metadata_without_channels_is_empty(recorder):
-    recorder(channels=["et", "mt"])
-    assert run(channels=[]) == []
-
-
-def test_scrape_metadata_missing_friend_skips_sample(recorder, caplog):
-    rec = recorder(
-        samples=["A", "B"],
-        channels=["et", "mt"],
-        friend_files={("fr2", "2018", "B", "mt"): None},
-    )
-    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
-        result = run(friends=[Friend(name="fr1"), Friend(name="fr2")])
-
-    assert [(s.sample, s.channel) for s in result] == [
-        ("A", "et"),
-        ("A", "mt"),
-        ("B", "et"),
-    ]
-    assert "Skipping sample B (2018, mt): fr2 is missing." in caplog.text
-    assert "Skipped 1 samples" in caplog.text
-    assert "2018 B mt: fr2 is missing" in caplog.text
-    # The shifts are not read for the skipped sample
-    assert len(rec.shift_calls) == 3
-
-
-def test_scrape_metadata_reports_all_missing_friends_of_a_sample(
-    recorder, caplog
+def test_scrape_sample_lists_only_selected_directories(
+    fake_fs_factory, no_shifts
 ):
-    recorder(
-        friend_files={
-            ("fr1", "2018", "A", "et"): None,
-            ("fr2", "2018", "A", "et"): None,
+    """No era, CROWNRun or sample directory and no unselected channel or
+    friend directory is listed."""
+    fs = fake_fs_factory(
+        {
+            _main_dir(channel="et"): ["1.root"],
+            _main_dir(channel="mt"): ["1.root"],
+            _main_dir(channel="em"): ["1.root"],
+            _friend_dir(channel="et"): ["1.root"],
+            _friend_dir(channel="mt"): ["1.root"],
         }
     )
-    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
-        result = run(friends=[Friend(name="fr1"), Friend(name="fr2")])
 
-    assert result == []
-    assert "fr1 is missing; fr2 is missing" in caplog.text
+    _scrape(
+        fs,
+        [Friend(name="fr"), Friend(name="other", include_samples=["^TT"])],
+        channels=["et", "mt"],
+    )
+
+    assert sorted(path for path, _ in fs.calls) == sorted(
+        [
+            _main_dir(channel="et"),
+            _main_dir(channel="mt"),
+            _friend_dir(channel="et"),
+            _friend_dir(channel="mt"),
+        ]
+    )
 
 
-def test_scrape_metadata_excluded_friend_is_not_required(recorder, caplog):
-    rec = recorder(friend_files={("fr", "2018", "A", "et"): None})
-    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
-        (result,) = run(friends=[Friend(name="fr", exclude_channels=["et"])])
+def test_scrape_sample_not_in_era(fake_fs_factory, no_shifts):
+    fs = fake_fs_factory()
 
-    assert result.friend_files == {}
-    assert rec.friend_calls == []
-    assert "Skipping sample" not in caplog.text
+    with pytest.raises(ms.SampleNotFoundError, match="A has no channel"):
+        _scrape(fs, channels=["et", "mt"])
+
+
+def test_scrape_sample_missing_channel_is_incomplete(
+    fake_fs_factory, no_shifts
+):
+    fs = fake_fs_factory({_main_dir(channel="et"): ["1.root"]})
+
+    with pytest.raises(
+        ms.IncompleteSampleError, match="channel mt is missing"
+    ):
+        _scrape(fs, channels=["et", "mt"])
+
+
+def test_scrape_sample_channel_without_files_is_incomplete(
+    fake_fs_factory, no_shifts
+):
+    fs = fake_fs_factory({_main_dir(): ["log.txt"]})
+
+    with pytest.raises(ms.IncompleteSampleError, match="has no files"):
+        _scrape(fs)
+
+
+def test_scrape_sample_reports_all_missing_friends(fake_fs_factory, no_shifts):
+    fs = fake_fs_factory({_main_dir(): ["1.root"]})
+
+    with pytest.raises(
+        ms.IncompleteSampleError,
+        match="et: fr1 is missing; et: fr2 is missing",
+    ):
+        _scrape(fs, [Friend(name="fr1"), Friend(name="fr2")])
+
+
+def test_scrape_sample_excluded_friend_is_not_required(
+    fake_fs_factory, no_shifts
+):
+    fs = fake_fs_factory({_main_dir(): ["1.root"]})
+
+    (record,) = _scrape(fs, [Friend(name="fr", exclude_channels=["et"])])
+
+    assert record.friend_files == {}
 
 
 @pytest.mark.parametrize(
@@ -383,146 +326,248 @@ def test_scrape_metadata_excluded_friend_is_not_required(recorder, caplog):
         ["1.root", "3.root"],  # other file
     ],
 )
-def test_scrape_metadata_incomplete_friend_skips_sample(
-    recorder, caplog, friend_names
+def test_scrape_sample_incomplete_friend(
+    fake_fs_factory, no_shifts, friend_names
 ):
-    main_dir = "/base/tag/CROWNRun/2018/A/et"
-    recorder(
-        files={main_dir: [f"{main_dir}/1.root", f"{main_dir}/2.root"]},
-        friend_files={
-            ("fr", "2018", "A", "et"): [f"fr/{n}" for n in friend_names]
-        },
-    )
-    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
-        result = run(friends=[Friend(name="fr")])
-
-    assert result == []
-    assert (
-        f"fr has {len(friend_names)} files with names different from the 2 "
-        + "main files"
-    ) in caplog.text
-
-
-def test_scrape_metadata_other_friend_listing_error_raises(
-    recorder, monkeypatch
-):
-    recorder()
-
-    def get_friend_files(*args):
-        raise RuntimeError("not authorized")
-
-    monkeypatch.setattr(ms, "get_friend_files", get_friend_files)
-    with pytest.raises(RuntimeError, match="not authorized"):
-        run(friends=[Friend(name="fr")])
-
-
-def test_scrape_metadata_missing_friend_directory_on_file_system(
-    monkeypatch, fake_fs_factory, caplog
-):
-    """With the real XRootD helpers, a missing friend directory skips the
-    sample instead of stopping the scraping."""
     fs = fake_fs_factory(
         {
-            "/base/tag/CROWNRun": ["2018"],
-            "/base/tag/CROWNRun/2018": ["A", "B"],
-            "/base/tag/CROWNRun/2018/A": ["et"],
-            "/base/tag/CROWNRun/2018/A/et": ["1.root"],
-            "/base/tag/CROWNRun/2018/B": ["et"],
-            "/base/tag/CROWNRun/2018/B/et": ["1.root"],
-            "/base/tag/CROWNFriend/fr/2018/A/et": ["1.root", "map.json"],
+            _main_dir(): ["1.root", "2.root"],
+            _friend_dir(): friend_names,
         }
     )
-    monkeypatch.setattr(ms, "get_shifts", lambda m, f: [])
-    with caplog.at_level(logging.WARNING, logger=ms.logger.name):
-        result = ms.scrape_metadata(
-            fs, "/base", "tag", [Friend(name="fr")], CAMPAIGNS, CHANNELS
-        )
 
-    assert [s.sample for s in result] == ["A"]
-    assert result[0].friend_files == {
-        "fr": [
-            "root://server.example:1094//base/tag/CROWNFriend/fr/2018/A/et/1.root"
-        ]
-    }
-    assert "Skipping sample B (2018, et): fr is missing." in caplog.text
+    with pytest.raises(
+        ms.IncompleteSampleError,
+        match=f"fr has {len(friend_names)} files with names different from "
+        + "the 2 main files",
+    ):
+        _scrape(fs, [Friend(name="fr")])
 
 
-def test_scrape_metadata_sample_filter(recorder):
-    recorder(samples=["A", "B"])
-    result = run(samples=["B"])
-    assert [s.sample for s in result] == ["B"]
+def test_scrape_sample_other_listing_error_raises(fake_fs_factory, no_shifts):
+    fs = fake_fs_factory(
+        {_main_dir(): ["1.root"]}, errors={_friend_dir(): 3010}
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to list") as error:
+        _scrape(fs, [Friend(name="fr")])
+
+    assert not isinstance(error.value, ms.IncompleteSampleError)
 
 
-def test_scrape_metadata_multiple_channels_keep_sample_name(recorder):
-    recorder(samples=["A"], channels=["et", "mt"])
-    result = run()
-    assert [(s.sample, s.channel) for s in result] == [
+# ------------------------------------------------------------ scrape_samples
+
+
+def _scrape_samples(fs, metadata_dir, names, campaigns=(C18,), **kwargs):
+    return ms.scrape_samples(
+        fs,
+        "/base",
+        "tag",
+        kwargs.pop("friends", []),
+        list(campaigns),
+        kwargs.pop("channels", ["et"]),
+        names,
+        metadata_dir,
+        **kwargs,
+    )
+
+
+def test_scrape_samples_writes_one_file_per_sample(
+    fake_fs_factory, no_shifts, tmp_path
+):
+    fs = fake_fs_factory(
+        {
+            _main_dir("A", "et"): ["1.root"],
+            _main_dir("A", "mt"): ["1.root"],
+            _main_dir("B", "et"): ["1.root"],
+            _main_dir("B", "mt"): ["1.root"],
+        }
+    )
+
+    result = _scrape_samples(fs, tmp_path, ["A", "B"], channels=["et", "mt"])
+
+    assert sorted(result.written) == [("2018", "A"), ("2018", "B")]
+    assert sorted(
+        p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")
+    ) == ["2018", "2018/A.json.gz", "2018/B.json.gz"]
+    records = load_sample_metadata(tmp_path, "2018", "A")
+    assert [(r.sample, r.channel) for r in records] == [
         ("A", "et"),
         ("A", "mt"),
     ]
 
 
-@pytest.mark.parametrize(
-    "friend, channel, expected",
-    [
-        (Friend(name="fr", include_channels=["et"]), "et", True),
-        (Friend(name="fr", include_channels=["et"]), "mt", False),
-        (Friend(name="fr", exclude_channels=["et"]), "et", False),
-        (Friend(name="fr", exclude_channels=["et"]), "mt", True),
-        (Friend(name="fr"), "tt", True),
-    ],
-    ids=["incl-hit", "incl-miss", "excl-hit", "excl-miss", "no-filter"],
-)
-def test_scrape_metadata_friend_channel_filter(
-    recorder, friend, channel, expected
+def test_scrape_samples_skips_existing_without_server_access(
+    fake_fs_factory, no_shifts, tmp_path
 ):
-    recorder(channels=[channel])
-    (result,) = run(friends=[friend])
-    assert ("fr" in result.friend_files) is expected
+    existing = metadata_path(tmp_path, "2018", "A")
+    existing.parent.mkdir()
+    existing.write_bytes(b"existing")
+    fs = fake_fs_factory()
+
+    result = _scrape_samples(fs, tmp_path, ["A"])
+
+    assert result.skipped == [("2018", "A")]
+    assert result.written == []
+    assert result.not_found == []
+    assert fs.calls == []
+    assert existing.read_bytes() == b"existing"
 
 
-def test_scrape_metadata_friend_without_campaign_filter_is_used(recorder):
-    recorder()
-    (result,) = run(friends=[Friend(name="fr")])
-    assert "fr" in result.friend_files
+def test_scrape_samples_overwrite(fake_fs_factory, no_shifts, tmp_path):
+    existing = metadata_path(tmp_path, "2018", "A")
+    existing.parent.mkdir()
+    existing.write_bytes(b"existing")
+    fs = fake_fs_factory({_main_dir(): ["1.root"]})
+
+    result = _scrape_samples(fs, tmp_path, ["A"], overwrite=True)
+
+    assert result.written == [("2018", "A")]
+    assert load_sample_metadata(tmp_path, "2018", "A")[0].sample == "A"
 
 
-@pytest.mark.parametrize(
-    "friend, expected",
-    [
-        (Friend(name="fr", include_campaigns=["c18"]), True),
-        (Friend(name="fr", include_campaigns=["c22"]), False),
-        (Friend(name="fr", exclude_campaigns=["c18"]), False),
-        (Friend(name="fr", exclude_campaigns=["c22"]), True),
-    ],
-    ids=["incl-hit", "incl-miss", "excl-hit", "excl-miss"],
-)
-def test_scrape_metadata_friend_campaign_filter(recorder, friend, expected):
-    recorder(eras=["2018"])
-    (result,) = run(friends=[friend])
-    assert ("fr" in result.friend_files) is expected
-
-
-@pytest.mark.parametrize(
-    "sample, expected", [("TT_2018", False), ("DY_2018", True)]
-)
-def test_scrape_metadata_friend_exclude_samples_regex(
-    recorder, sample, expected
+def test_scrape_samples_one_bad_channel_writes_no_file(
+    fake_fs_factory, no_shifts, tmp_path
 ):
-    recorder(samples=[sample])
-    (result,) = run(friends=[Friend(name="fr", exclude_samples=["^TT"])])
-    assert ("fr" in result.friend_files) is expected
+    """A partial file would block the missing channel in later runs."""
+    fs = fake_fs_factory(
+        {
+            _main_dir(channel="et"): ["1.root"],
+            _friend_dir(channel="et"): ["1.root"],
+            _main_dir(channel="mt"): ["1.root"],
+        }
+    )
+
+    result = _scrape_samples(
+        fs, tmp_path, ["A"], friends=[Friend(name="fr")], channels=["et", "mt"]
+    )
+
+    assert result.written == []
+    assert result.incomplete == [("2018", "A", "mt: fr is missing")]
+    assert not metadata_path(tmp_path, "2018", "A").exists()
+
+    # A later run finds the friend
+    fs.listings[_friend_dir(channel="mt")] = ["1.root"]
+    result = _scrape_samples(
+        fs, tmp_path, ["A"], friends=[Friend(name="fr")], channels=["et", "mt"]
+    )
+    assert result.written == [("2018", "A")]
 
 
-@pytest.mark.parametrize(
-    "sample, expected", [("TT_2018", True), ("DY_2018", False)]
-)
-def test_scrape_metadata_friend_include_samples_regex(
-    recorder, sample, expected
+def test_scrape_samples_failure_does_not_stop_others(
+    fake_fs_factory, no_shifts, tmp_path, caplog
 ):
-    recorder(samples=[sample])
-    (result,) = run(friends=[Friend(name="fr", include_samples=["^TT"])])
-    assert ("fr" in result.friend_files) is expected
+    fs = fake_fs_factory(
+        {_main_dir("B"): ["1.root"]},
+        errors={_main_dir("A"): 3010},
+    )
+
+    with caplog.at_level(logging.ERROR, logger=ms.logger.name):
+        result = _scrape_samples(fs, tmp_path, ["A", "B"], n_parallel=1)
+
+    assert result.failed == [("2018", "A")]
+    assert result.written == [("2018", "B")]
+    assert "Failed to scrape A (2018)" in caplog.text
+    assert not metadata_path(tmp_path, "2018", "A").exists()
+
+
+def test_scrape_samples_reports_samples_not_found(
+    fake_fs_factory, no_shifts, tmp_path
+):
+    """A sample only has to exist in one of the selected eras."""
+    fs = fake_fs_factory({_main_dir("A", era="2022"): ["1.root"]})
+
+    result = _scrape_samples(fs, tmp_path, ["A", "Z"], campaigns=[C18, C22])
+
+    assert result.written == [("2022", "A")]
+    assert result.not_found == ["Z"]
+    assert sorted(p.name for p in tmp_path.rglob("*.json.gz")) == ["A.json.gz"]
+
+
+def test_scrape_samples_duplicate_names(fake_fs_factory, no_shifts, tmp_path):
+    fs = fake_fs_factory({_main_dir(): ["1.root"]})
+
+    result = _scrape_samples(fs, tmp_path, ["A", "A"])
+
+    assert result.written == [("2018", "A")]
+
+
+def test_scrape_samples_invalid_number_of_threads(tmp_path):
+    with pytest.raises(ValueError, match="n_parallel"):
+        _scrape_samples(None, tmp_path, ["A"], n_parallel=0)
+
+
+# ----------------------------------------------------------------------- CLI
+
+
+@pytest.fixture
+def cli_args(tmp_path):
+    samples_file = tmp_path / "samples.txt"
+    samples_file.write_text("A\n/B/C/NANOAODSIM\n")
+    return [
+        "--samples-file",
+        str(samples_file),
+        "--campaign",
+        "2024_nano_v15",
+        f"metadata_dir={tmp_path / 'metadata'}",
+        "ntuple.base_dir=/base",
+        "ntuple.tag=tag",
+        "ntuple.friends=[]",
+    ]
+
+
+def test_cli_requires_samples_file():
+    with pytest.raises(SystemExit):
+        cli.main(["--dry-run"])
+
+
+def test_cli_dry_run(cli_args, tmp_path, capsys, monkeypatch):
+    def no_server(server):
+        raise AssertionError("The server must not be accessed")
+
+    monkeypatch.setattr(cli, "FileSystem", no_server)
+    existing = metadata_path(tmp_path / "metadata", "2024", "A")
+    existing.parent.mkdir(parents=True)
+    existing.touch()
+
+    assert cli.main(["--dry-run", *cli_args]) == 0
+
+    assert capsys.readouterr().out.splitlines() == ["2024 B_C"]
+
+
+def test_cli_unknown_campaign(cli_args, caplog):
+    assert cli.main(["--campaign", "2024", *cli_args]) == 2
+    assert "Unknown campaigns" in caplog.text
+
+
+def test_cli_scrapes_and_reports(
+    cli_args, tmp_path, fake_fs_factory, no_shifts, monkeypatch, caplog
+):
+    channels = ["et", "mt", "tt"]
+    listings = {
+        _main_dir("A", c, era="2024"): ["1.root"] for c in channels
+    } | {_main_dir("B_C", "et", era="2024"): ["1.root"]}
+    fs = fake_fs_factory(listings)
+    monkeypatch.setattr(cli, "FileSystem", lambda server: fs)
+
+    with caplog.at_level(logging.INFO):
+        assert cli.main(cli_args) == 0
+
+    metadata_dir = tmp_path / "metadata"
+    assert metadata_path(metadata_dir, "2024", "A").exists()
+    assert not metadata_path(metadata_dir, "2024", "B_C").exists()
+    assert "1 written, 0 skipped (exist), 1 incomplete" in caplog.text
+    assert "2024 B_C: channel mt is missing" in caplog.text
+
+
+def test_cli_failure_gives_exit_code(
+    cli_args, fake_fs_factory, no_shifts, monkeypatch, caplog
+):
+    fs = fake_fs_factory(errors={_main_dir("A", "et", era="2024"): 3010})
+    monkeypatch.setattr(cli, "FileSystem", lambda server: fs)
+
+    assert cli.main(cli_args) == 1
+    assert "1 samples failed" in caplog.text
 
 
 def test_scrape_metadata_config_has_channels():
@@ -532,3 +577,5 @@ def test_scrape_metadata_config_has_channels():
         cfg = compose("scrape_metadata")
 
     assert [c.name for c in cfg.channels] == ["et", "mt", "tt"]
+    assert cfg.metadata_dir.endswith("/metadata")
+    assert "samples" not in cfg.ntuple
