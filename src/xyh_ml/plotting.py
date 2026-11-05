@@ -220,6 +220,75 @@ def add_class_indices(data_frame: DataFrame, cfg: Config) -> DataFrame:
     return data_frame
 
 
+def yields_per_predicted_class(
+    data_frame: DataFrame,
+    cfg: Config,
+) -> tuple[DataFrame, DataFrame]:
+    """
+    Expected number of true background and true signal events in each
+    predicted class for every campaign, channel and mass point.
+
+    The yield is the sum of `__total_weight / reduction_rate`, which scales
+    the sampled events back to the full expected yield. Events of signal
+    output classes (`is_signal`) are counted as signal, all others as
+    background. Combinations without events have a yield of 0.
+
+    Parameters
+    ----------
+    data_frame : DataFrame
+        Predictions with the columns `campaign`, `channel`, `m_x`, `m_y`,
+        `__total_weight`, `reduction_rate`, the output variable and
+        `predicted_class_index` (see `add_class_indices`).
+    cfg : Config
+        Configuration with the `outputs` section.
+
+    Returns
+    -------
+    tuple[DataFrame, DataFrame]
+        Yields of true background and of true signal events, each with the
+        columns `campaign`, `channel`, `m_x`, `m_y`, `predicted_class` and
+        `yield`, with one row per mass point and predicted class.
+    """
+    output_classes = cfg.outputs.classes
+    output_variable_name = cfg.outputs.variables[0].name
+    signal_names = [c.name for c in output_classes if c.is_signal]
+    keys = ["campaign", "channel", "m_x", "m_y"]
+
+    # All mass points of the data frame, so that mass points without events
+    # of one truth category get a yield of 0
+    mass_points = pd.MultiIndex.from_frame(
+        data_frame[keys].drop_duplicates().sort_values(keys)
+    )
+
+    weight = data_frame["__total_weight"] / data_frame["reduction_rate"]
+    is_signal = data_frame[output_variable_name].isin(signal_names)
+
+    yields = []
+    for selection in [~is_signal, is_signal]:
+        df = data_frame.loc[selection, keys + ["predicted_class_index"]]
+        table = (
+            weight[selection]
+            .groupby([df[k] for k in keys + ["predicted_class_index"]])
+            .sum()
+            .unstack("predicted_class_index", fill_value=0.0)
+            .reindex(
+                index=mass_points,
+                columns=range(len(output_classes)),
+                fill_value=0.0,
+            )
+        )
+        table.columns = [c.name for c in output_classes]
+        table.columns.name = "predicted_class"
+        yields.append(
+            table.stack()
+            .rename("yield")
+            .reset_index()
+            .astype({"yield": float})
+        )
+
+    return yields[0], yields[1]
+
+
 def get_fold_label(cfg: Config, merge_folds: bool = False) -> tuple[str, str]:
     """
     Get the label of the evaluated fold(s) for plot titles and file names.
@@ -305,7 +374,8 @@ def plot_mass_grid(
     legend_title : str, optional
         Title of the legend. Default is `"Category"`.
     log_y : bool, optional
-        If `True`, use a logarithmic y axis. Default is `False`.
+        If `True`, use a logarithmic y axis; values <= 0 are not drawn.
+        Default is `False`.
     ylim : tuple[float, float] | None, optional
         Limits of the y axes; `None` keeps the automatic limits. Default is
         `(0.0, 1.05)`.
@@ -332,11 +402,14 @@ def plot_mass_grid(
         x = np.arange(len(df_part_x)) + 0.5
         x_labels = [f"{int(m_y)}" for m_y in df_part_x["m_y"]]
 
-        # One line per output class
+        # One line per output class. On a logarithmic axis, values <= 0 are
+        # left out (gap in the line) instead of being drawn at the bottom.
         for output_class in output_classes:
             y = df_part.loc[
                 df_part[line_column] == output_class.name, value_column
-            ].to_numpy()
+            ].to_numpy(dtype=float)
+            if log_y:
+                y = np.where(y > 0, y, np.nan)
             ax[j].plot(x, y, label=output_class.label, linestyle="dashed")
 
         # Vertical lines at the edges of the m_X slices and m_X labels in the

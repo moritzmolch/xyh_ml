@@ -1,0 +1,28 @@
+# -----------------------------------------------------------------------------
+# Default configuration for plotting the event yields per predicted class
+# -----------------------------------------------------------------------------
+
+defaults:
+- base/artifacts@artifacts
+- base/data_source@data_source
+- base/dataset@dataset
+- base/mode@mode
+- base/network@network
+- base/outputs@outputs
+- base/plotting@plotting
+- base/tags@tags
+- base/training@training
+- inputs: y2b_h2tau
+- _self_
+
+
+# -----------------------------------------------------------------------------
+# Hydra configuration
+# -----------------------------------------------------------------------------
+
+hydra:
+  run:
+    dir: output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+  verbose: INFO

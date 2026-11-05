@@ -17,6 +17,7 @@ from xyh_ml.plotting import (
     load_predictions,
     plot_mass_grid,
     save_figure,
+    yields_per_predicted_class,
 )
 
 matplotlib.use("Agg")
@@ -219,6 +220,30 @@ def test_plot_mass_grid(log_y):
     plt.close(fig)
 
 
+@pytest.mark.filterwarnings("ignore:Tight layout not applied")
+def test_plot_mass_grid_log_y_skips_zeros():
+    data = _mass_grid_data()
+    data.loc[(data["class"] == "t_tt") & (data["m_x"] == 300), "value"] = 0.0
+
+    fig, ax = plot_mass_grid(
+        data,
+        line_column="class",
+        value_column="value",
+        output_classes=_output_classes(),
+        ylabel="value",
+        rlabel="test",
+        log_y=True,
+        ylim=None,
+    )
+
+    line = next(x for x in ax[0].get_lines() if x.get_label() == "t_tt")
+    y = np.asarray(line.get_ydata(), dtype=float)
+    # The two mass points with m_x = 300 come first and are not drawn
+    assert np.isnan(y[:2]).all()
+    np.testing.assert_allclose(y[2:], [0.2] * 3)
+    plt.close(fig)
+
+
 def test_save_figure(monkeypatch, tmp_path):
     monkeypatch.setattr(xyh_ml.plotting, "PROJECT_DIR", tmp_path)
     cfg = OmegaConf.create({"tags": {"training_tag": "tag"}})
@@ -232,6 +257,84 @@ def test_save_figure(monkeypatch, tmp_path):
     ]
     assert all(f.exists() for f in files)
     assert not plt.fignum_exists(fig.number)
+
+
+def test_yields_per_predicted_class():
+    cfg = OmegaConf.create(
+        {
+            "outputs": {
+                "variables": [{"name": "class"}],
+                "classes": [
+                    {"name": c, "is_signal": c == "xyh"} for c in CLASSES
+                ],
+            }
+        }
+    )
+    # Two mass points; background events are repeated for both, signal
+    # events only exist for the first mass point. Predicted class indices
+    # refer to CLASSES = [xyh, t_tt, z2tau].
+    df = pd.DataFrame.from_records(
+        [
+            # campaign, channel, m_x, m_y, class, weight, rate, predicted
+            ("c", "et", 300, 60, "t_tt", 2.0, 0.5, 1),
+            ("c", "et", 300, 60, "t_tt", 1.0, 0.5, 0),
+            ("c", "et", 300, 60, "z2tau", 3.0, 1.0, 1),
+            ("c", "et", 300, 60, "xyh", 1.0, 0.25, 0),
+            ("c", "et", 300, 60, "xyh", 0.5, 0.25, 2),
+            ("c", "et", 400, 70, "t_tt", 2.0, 0.5, 1),
+            ("c", "et", 400, 70, "t_tt", 1.0, 0.5, 1),
+            ("c", "et", 400, 70, "z2tau", 3.0, 1.0, 2),
+        ],
+        columns=[
+            "campaign",
+            "channel",
+            "m_x",
+            "m_y",
+            "class",
+            "__total_weight",
+            "reduction_rate",
+            "predicted_class_index",
+        ],
+    )
+
+    background, signal = yields_per_predicted_class(df, cfg)
+
+    def as_dict(yields):
+        return {
+            (r.m_x, r.predicted_class): r["yield"]
+            for _, r in yields.iterrows()
+        }
+
+    # Background: weights divided by the reduction rate, per predicted class
+    assert as_dict(background) == {
+        (300, "xyh"): 2.0,
+        (300, "t_tt"): 4.0 + 3.0,
+        (300, "z2tau"): 0.0,
+        (400, "xyh"): 0.0,
+        (400, "t_tt"): 4.0 + 2.0,
+        (400, "z2tau"): 3.0,
+    }
+    # Signal: the second mass point has no signal events and yields 0
+    assert as_dict(signal) == {
+        (300, "xyh"): 4.0,
+        (300, "t_tt"): 0.0,
+        (300, "z2tau"): 2.0,
+        (400, "xyh"): 0.0,
+        (400, "t_tt"): 0.0,
+        (400, "z2tau"): 0.0,
+    }
+    assert list(background.columns) == [
+        "campaign",
+        "channel",
+        "m_x",
+        "m_y",
+        "predicted_class",
+        "yield",
+    ]
+    # The sum over predicted classes is the total background yield, which is
+    # the same for both mass points except for the moved events
+    totals = background.groupby("m_x")["yield"].sum()
+    assert totals.tolist() == [9.0, 9.0]
 
 
 def test_get_rlabel():
