@@ -1,17 +1,27 @@
 from copy import deepcopy
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
 from omegaconf import DictConfig, OmegaConf
 
+import xyh_ml.plotting
+from xyh_ml.config import OutputClass
 from xyh_ml.plotting import (
     add_class_indices,
     get_fold_label,
     get_predictions_file,
+    get_rlabel,
     load_predictions,
+    plot_mass_grid,
+    save_figure,
 )
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt  # noqa: E402
 
 N_FOLDS = 3
 CLASSES = ["xyh", "t_tt", "z2tau"]
@@ -140,3 +150,91 @@ def test_get_fold_label(cfg):
         "all folds of 3",
         "allfoldsof3",
     )
+
+
+def _output_classes() -> list[OutputClass]:
+    return [
+        OutputClass(name=c, label=c, file_basenames=[], is_signal=c == "xyh")
+        for c in CLASSES
+    ]
+
+
+def _mass_grid_data() -> pd.DataFrame:
+    # Two m_x slices in the upper panel (m_x <= 1500) and one in the lower
+    # panel, in shuffled order; the value encodes the class
+    mass_points = [
+        (300, 60),
+        (300, 70),
+        (1000, 60),
+        (1000, 70),
+        (1000, 80),
+        (2000, 90),
+        (2000, 100),
+    ]
+    records = [
+        {"m_x": m_x, "m_y": m_y, "class": c, "value": 0.1 * (k + 1)}
+        for m_x, m_y in mass_points
+        for k, c in enumerate(CLASSES)
+    ]
+    return pd.DataFrame.from_records(records).sample(frac=1, random_state=1)
+
+
+@pytest.mark.parametrize("log_y", [False, True])
+@pytest.mark.filterwarnings("ignore:Tight layout not applied")
+def test_plot_mass_grid(log_y):
+    fig, ax = plot_mass_grid(
+        _mass_grid_data(),
+        line_column="class",
+        value_column="value",
+        output_classes=_output_classes(),
+        ylabel="value",
+        rlabel="test",
+        log_y=log_y,
+        ylim=None if log_y else (0.0, 1.05),
+    )
+
+    assert len(ax) == 2
+    for a, n_points in zip(ax, [5, 2]):
+        # One line per class, with one point per mass point of the panel
+        lines = {
+            line.get_label(): line
+            for line in a.get_lines()
+            if line.get_label() in CLASSES
+        }
+        assert list(lines) == CLASSES
+        for k, c in enumerate(CLASSES):
+            np.testing.assert_allclose(
+                lines[c].get_ydata(), [0.1 * (k + 1)] * n_points
+            )
+        assert a.get_yscale() == ("log" if log_y else "linear")
+
+    # m_y tick labels sorted by m_x, then m_y (every second one is shown)
+    labels = [t.get_text() for t in ax[0].get_xticklabels()]
+    assert labels == ["60", "60", "80"]
+
+    # m_x slice labels followed by the m_x axis label
+    texts = [t.get_text() for t in ax[0].texts]
+    assert texts[:2] == ["300", "1000"]
+    assert [t.get_text() for t in ax[1].texts][0] == "2000"
+    plt.close(fig)
+
+
+def test_save_figure(monkeypatch, tmp_path):
+    monkeypatch.setattr(xyh_ml.plotting, "PROJECT_DIR", tmp_path)
+    cfg = OmegaConf.create({"tags": {"training_tag": "tag"}})
+    fig = plt.figure()
+
+    files = save_figure(fig, cfg, "stem")
+
+    assert files == [
+        tmp_path / "data/output/tag/plots/stem.pdf",
+        tmp_path / "data/output/tag/plots/stem.png",
+    ]
+    assert all(f.exists() for f in files)
+    assert not plt.fignum_exists(fig.number)
+
+
+def test_get_rlabel():
+    rlabel = get_rlabel("y2b_h2tau", "2024_nano_v15", "et", "a", "b")
+    parts = rlabel.split(",  ")
+    assert parts[1:] == ["2024", r"$\text{e}\tau_{\text{h}}$", "a", "b"]
