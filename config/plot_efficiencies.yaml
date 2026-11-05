@@ -9,6 +9,7 @@ defaults:
 - base/mode@mode
 - base/network@network
 - base/outputs@outputs
+- base/plotting@plotting
 - base/tags@tags
 - base/training@training
 - inputs: y2b_h2tau
