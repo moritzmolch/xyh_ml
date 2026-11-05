@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Default configuration for plotting the event yields per predicted class
+# Default configuration for plotting the event yields in the signal category
 # -----------------------------------------------------------------------------
 
 defaults:

@@ -25,7 +25,7 @@ Machine learning for the X → YH → bbττ analysis (KIT, CMS). The package `x
 **Pipeline** (each stage is a script in `src/xyh_ml/cli/`, paired with a top-level YAML in `config/`):
 1. `preprocess_snapshots` (`config/preprocess_snapshots.yaml`) — reads ROOT snapshots (per campaign/channel from `data_source`), writes HDF5 data frames under `artifacts.data_frame_dir`.
 2. `train_classifier` (`config/train_classifier.yaml`) — trains a parametrized MLP (`cli/model.py`, `MultiLayerPerceptron`) separately per `decay_mode`, held-out `fold` (k-fold split on `event % mode.n_folds`; the held-out fold is used for evaluation) and analysis `channel` (et/mt/tt). Outputs go to `artifacts.training_dir`.
-3. `evaluate_test_sample` / `plot_efficiencies` / `plot_output_class_fractions` / `plot_event_yields` — categorization over the evaluation fold (predictions in `predictions_dir`) and plots. Shared plot helpers (labels, loading/merging of predictions, the m_X/m_Y mass grid plot `plot_mass_grid`, yields per predicted class) live in `xyh_ml/plotting.py`.
+3. `evaluate_test_sample` / `plot_efficiencies` / `plot_output_class_fractions` / `plot_event_yields` — categorization over the evaluation fold (predictions in `predictions_dir`) and plots. Shared plot helpers (labels, loading/merging of predictions, the m_X/m_Y mass grid plot `plot_mass_grid`, yields per true class) live in `xyh_ml/plotting.py`.
 
 **Workflow** (run from the repo root; repeat per `mode.decay_mode` ∈ {`y2b_h2tau`, `y2tau_h2b`, also select `inputs=<same>`} per `mode.fold` ∈ {0, …, `mode.n_folds`-1} and per `mode.channel` ∈ {et, mt, tt}; `tags.snapshot_tag` / `tags.training_tag` default to `config/base/tags.yaml`):
 ```bash
@@ -39,7 +39,7 @@ python -m xyh_ml.cli.evaluate_test_sample $M mode.fold=0
 # 4. Efficiency, output class fraction and event yield plots (pdf/png) from the h5 of 3 -> data/output/<training_tag>/plots/
 python -m xyh_ml.cli.plot_efficiencies $M mode.fold=0
 python -m xyh_ml.cli.plot_output_class_fractions $M mode.fold=0
-# expected true background / true signal events per predicted class (log scale)
+# expected events per true process class in the predicted xyh category (log scale)
 python -m xyh_ml.cli.plot_event_yields $M mode.fold=0
 # 4b. Same plots with the predictions of all folds merged (needs step 3 for every fold; file suffix allfoldsof<n_folds>)
 python -m xyh_ml.cli.plot_efficiencies $M plotting.merge_folds=true

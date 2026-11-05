@@ -1,7 +1,6 @@
 """
-Plot the expected number of events in each predicted output class as a
-function of the mass point (m_X, m_Y), separately for true background events
-(all classes except the signal) and for true signal events.
+Plot the expected number of events predicted as signal as a function of the
+mass point (m_X, m_Y), with one line for each true process class.
 """
 
 import logging
@@ -18,7 +17,7 @@ from xyh_ml.plotting import (
     plot_mass_grid,
     save_figure,
     set_plot_style,
-    yields_per_predicted_class,
+    yields_per_true_class,
 )
 
 set_plot_style()
@@ -41,41 +40,35 @@ def main(cfg: Config):
     data_frame = add_class_indices(data_frame, cfg)
     fold_title, fold_suffix = get_fold_label(cfg, merge_folds=merge_folds)
 
-    # Expected number of true background and true signal events in each
-    # predicted class
-    yields_background, yields_signal = yields_per_predicted_class(
-        data_frame, cfg
-    )
-    signal_label = " + ".join(
-        c.label for c in cfg.outputs.classes if c.is_signal
-    )
+    # Expected number of events of each true class in the signal categories
+    for signal_class in cfg.outputs.classes:
+        if not signal_class.is_signal:
+            continue
 
-    for name, yields, ylabel, truth_label in [
-        ("background", yields_background, "Background events", "true bkg."),
-        ("signal", yields_signal, "Signal events", f"true {signal_label}"),
-    ]:
+        yields = yields_per_true_class(data_frame, cfg, signal_class.name)
         for (campaign, channel), df in yields.groupby(["campaign", "channel"]):
             fig, _ = plot_mass_grid(
                 df,
-                line_column="predicted_class",
+                line_column="true_class",
                 value_column="yield",
                 output_classes=cfg.outputs.classes,
-                ylabel=ylabel,
+                ylabel="Events",
                 rlabel=get_rlabel(
                     cfg.mode.decay_mode,
                     campaign,
                     channel,
-                    truth_label,
+                    f"predicted {signal_class.label}",
                     fold_title,
                 ),
-                legend_title="Prediction",
+                legend_title="True process",
                 log_y=True,
                 ylim=None,
             )
             save_figure(
                 fig,
                 cfg,
-                f"yields_{name}__{cfg.mode.decay_mode}__{campaign}"
+                f"yields_predicted_{signal_class.name}"
+                f"__{cfg.mode.decay_mode}__{campaign}"
                 f"__{channel}__{fold_suffix}",
             )
 

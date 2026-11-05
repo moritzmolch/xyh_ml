@@ -220,73 +220,65 @@ def add_class_indices(data_frame: DataFrame, cfg: Config) -> DataFrame:
     return data_frame
 
 
-def yields_per_predicted_class(
+def yields_per_true_class(
     data_frame: DataFrame,
     cfg: Config,
-) -> tuple[DataFrame, DataFrame]:
+    predicted_class: str,
+) -> DataFrame:
     """
-    Expected number of true background and true signal events in each
-    predicted class for every campaign, channel and mass point.
+    Expected number of events of each true class among the events predicted
+    as `predicted_class`, for every campaign, channel and mass point.
 
     The yield is the sum of `__total_weight / reduction_rate`, which scales
-    the sampled events back to the full expected yield. Events of signal
-    output classes (`is_signal`) are counted as signal, all others as
-    background. Combinations without events have a yield of 0.
+    the sampled events back to the full expected yield. Combinations without
+    events have a yield of 0.
 
     Parameters
     ----------
     data_frame : DataFrame
         Predictions with the columns `campaign`, `channel`, `m_x`, `m_y`,
-        `__total_weight`, `reduction_rate`, the output variable and
+        `__total_weight`, `reduction_rate`, `true_class_index` and
         `predicted_class_index` (see `add_class_indices`).
     cfg : Config
         Configuration with the `outputs` section.
+    predicted_class : str
+        Name of the predicted output class to select.
 
     Returns
     -------
-    tuple[DataFrame, DataFrame]
-        Yields of true background and of true signal events, each with the
-        columns `campaign`, `channel`, `m_x`, `m_y`, `predicted_class` and
-        `yield`, with one row per mass point and predicted class.
+    DataFrame
+        Yields with the columns `campaign`, `channel`, `m_x`, `m_y`,
+        `true_class` and `yield`, with one row per mass point and true class.
     """
     output_classes = cfg.outputs.classes
-    output_variable_name = cfg.outputs.variables[0].name
-    signal_names = [c.name for c in output_classes if c.is_signal]
+    class_names = [c.name for c in output_classes]
     keys = ["campaign", "channel", "m_x", "m_y"]
 
-    # All mass points of the data frame, so that mass points without events
-    # of one truth category get a yield of 0
+    # All mass points of the data frame, so that mass points without selected
+    # events get a yield of 0
     mass_points = pd.MultiIndex.from_frame(
         data_frame[keys].drop_duplicates().sort_values(keys)
     )
 
+    selection = data_frame["predicted_class_index"] == class_names.index(
+        predicted_class
+    )
+    df = data_frame.loc[selection, keys + ["true_class_index"]]
     weight = data_frame["__total_weight"] / data_frame["reduction_rate"]
-    is_signal = data_frame[output_variable_name].isin(signal_names)
-
-    yields = []
-    for selection in [~is_signal, is_signal]:
-        df = data_frame.loc[selection, keys + ["predicted_class_index"]]
-        table = (
-            weight[selection]
-            .groupby([df[k] for k in keys + ["predicted_class_index"]])
-            .sum()
-            .unstack("predicted_class_index", fill_value=0.0)
-            .reindex(
-                index=mass_points,
-                columns=range(len(output_classes)),
-                fill_value=0.0,
-            )
+    table = (
+        weight[selection]
+        .groupby([df[k] for k in keys + ["true_class_index"]])
+        .sum()
+        .unstack("true_class_index", fill_value=0.0)
+        .reindex(
+            index=mass_points,
+            columns=range(len(output_classes)),
+            fill_value=0.0,
         )
-        table.columns = [c.name for c in output_classes]
-        table.columns.name = "predicted_class"
-        yields.append(
-            table.stack()
-            .rename("yield")
-            .reset_index()
-            .astype({"yield": float})
-        )
+    )
+    table.columns = pd.Index(class_names, name="true_class")
 
-    return yields[0], yields[1]
+    return table.stack().rename("yield").reset_index().astype({"yield": float})
 
 
 def get_fold_label(cfg: Config, merge_folds: bool = False) -> tuple[str, str]:

@@ -17,7 +17,7 @@ from xyh_ml.plotting import (
     load_predictions,
     plot_mass_grid,
     save_figure,
-    yields_per_predicted_class,
+    yields_per_true_class,
 )
 
 matplotlib.use("Agg")
@@ -259,82 +259,57 @@ def test_save_figure(monkeypatch, tmp_path):
     assert not plt.fignum_exists(fig.number)
 
 
-def test_yields_per_predicted_class():
+def test_yields_per_true_class():
     cfg = OmegaConf.create(
-        {
-            "outputs": {
-                "variables": [{"name": "class"}],
-                "classes": [
-                    {"name": c, "is_signal": c == "xyh"} for c in CLASSES
-                ],
-            }
-        }
+        {"outputs": {"classes": [{"name": c} for c in CLASSES]}}
     )
-    # Two mass points; background events are repeated for both, signal
-    # events only exist for the first mass point. Predicted class indices
-    # refer to CLASSES = [xyh, t_tt, z2tau].
+    # Two mass points; class indices refer to CLASSES = [xyh, t_tt, z2tau].
+    # The events predicted as t_tt (index 1) must not be counted, and the
+    # second mass point has no events predicted as xyh at all.
     df = pd.DataFrame.from_records(
         [
-            # campaign, channel, m_x, m_y, class, weight, rate, predicted
-            ("c", "et", 300, 60, "t_tt", 2.0, 0.5, 1),
-            ("c", "et", 300, 60, "t_tt", 1.0, 0.5, 0),
-            ("c", "et", 300, 60, "z2tau", 3.0, 1.0, 1),
-            ("c", "et", 300, 60, "xyh", 1.0, 0.25, 0),
-            ("c", "et", 300, 60, "xyh", 0.5, 0.25, 2),
-            ("c", "et", 400, 70, "t_tt", 2.0, 0.5, 1),
-            ("c", "et", 400, 70, "t_tt", 1.0, 0.5, 1),
-            ("c", "et", 400, 70, "z2tau", 3.0, 1.0, 2),
+            # campaign, channel, m_x, m_y, weight, rate, true, predicted
+            ("c", "et", 300, 60, 1.0, 0.25, 0, 0),
+            ("c", "et", 300, 60, 0.5, 0.25, 0, 0),
+            ("c", "et", 300, 60, 9.0, 0.25, 0, 1),
+            ("c", "et", 300, 60, 2.0, 0.5, 1, 0),
+            ("c", "et", 300, 60, 9.0, 0.5, 2, 1),
+            ("c", "et", 400, 70, 9.0, 0.5, 1, 1),
         ],
         columns=[
             "campaign",
             "channel",
             "m_x",
             "m_y",
-            "class",
             "__total_weight",
             "reduction_rate",
+            "true_class_index",
             "predicted_class_index",
         ],
     )
 
-    background, signal = yields_per_predicted_class(df, cfg)
+    yields = yields_per_true_class(df, cfg, "xyh")
 
-    def as_dict(yields):
-        return {
-            (r.m_x, r.predicted_class): r["yield"]
-            for _, r in yields.iterrows()
-        }
-
-    # Background: weights divided by the reduction rate, per predicted class
-    assert as_dict(background) == {
-        (300, "xyh"): 2.0,
-        (300, "t_tt"): 4.0 + 3.0,
-        (300, "z2tau"): 0.0,
-        (400, "xyh"): 0.0,
-        (400, "t_tt"): 4.0 + 2.0,
-        (400, "z2tau"): 3.0,
-    }
-    # Signal: the second mass point has no signal events and yields 0
-    assert as_dict(signal) == {
-        (300, "xyh"): 4.0,
-        (300, "t_tt"): 0.0,
-        (300, "z2tau"): 2.0,
-        (400, "xyh"): 0.0,
-        (400, "t_tt"): 0.0,
-        (400, "z2tau"): 0.0,
-    }
-    assert list(background.columns) == [
+    assert list(yields.columns) == [
         "campaign",
         "channel",
         "m_x",
         "m_y",
-        "predicted_class",
+        "true_class",
         "yield",
     ]
-    # The sum over predicted classes is the total background yield, which is
-    # the same for both mass points except for the moved events
-    totals = background.groupby("m_x")["yield"].sum()
-    assert totals.tolist() == [9.0, 9.0]
+    # Weights divided by the reduction rate, per true class; combinations
+    # without events are 0
+    assert {
+        (r.m_x, r.true_class): r["yield"] for _, r in yields.iterrows()
+    } == {
+        (300, "xyh"): 6.0,
+        (300, "t_tt"): 4.0,
+        (300, "z2tau"): 0.0,
+        (400, "xyh"): 0.0,
+        (400, "t_tt"): 0.0,
+        (400, "z2tau"): 0.0,
+    }
 
 
 def test_get_rlabel():
