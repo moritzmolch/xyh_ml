@@ -1,10 +1,13 @@
 """Tests for the HTCondor submission, without a real HTCondor."""
 
+import io
 import json
 import logging
 import os
 import stat
 import subprocess
+import sys
+import tarfile
 from types import SimpleNamespace
 
 import pytest
@@ -849,3 +852,310 @@ def test_collect_without_submission(tmp_path, caplog):
 def test_collect_takes_no_other_options(tmp_path):
     with pytest.raises(SystemExit):
         pm.main(["--collect", str(tmp_path), "--sample", "DY"])
+
+
+# ------------------------------------------------------------- --condor-remote
+
+
+ENV_PACK_URL = "root://server//store/sandboxes/env-cpu-abc.sh"
+TRAINING_DIR = "fold${mode.fold}of${mode.n_folds}/${mode.channel}"
+
+
+@pytest.fixture
+def training_dir(tmp_path):
+    root = tmp_path / "training"
+    for fold in range(5):
+        for channel in ["et", "mt", "tt"]:
+            directory = root / f"fold{fold}of5" / channel
+            directory.mkdir(parents=True)
+            for name in ["transformations.pkl", "best_model.ckpt"]:
+                (directory / name).write_text(f"{fold} {channel} {name}")
+    return root
+
+
+@pytest.fixture
+def storage(monkeypatch):
+    """Grid storage for the bundle, and a fake environment pack."""
+    files = {}
+    sandbox = sys.modules["xyh_ml.friend_production.sandbox"]
+    monkeypatch.setattr(sandbox, "xrd_exists", lambda url: url in files)
+    monkeypatch.setattr(
+        sandbox,
+        "xrd_upload",
+        lambda local_file, url: files.update({url: local_file.read_bytes()}),
+    )
+    monkeypatch.setattr(
+        pm, "environment_pack", lambda url, project: ENV_PACK_URL
+    )
+    return files
+
+
+def _remote_args(metadata, tmp_path, training_dir, *options):
+    return [
+        "--sample",
+        "DY",
+        "--n-files",
+        "2",
+        "--log-dir",
+        str(tmp_path / "run"),
+        "--condor-remote",
+        *options,
+        f"metadata_dir={metadata}",
+        f"artifacts.training_dir={training_dir}/{TRAINING_DIR}",
+        "nn_friend_tag=tag",
+    ]
+
+
+def test_remote_job_command_is_parsed_by_hydra():
+    job = pm.Job(
+        index=0,
+        era="2024",
+        campaign="2024_nano_v15",
+        channel="tt",
+        input_files=["root://server//store/f.root"],
+        output_files=["x"],
+        samples=["DY"],
+    )
+
+    command = pm.remote_job_command(
+        job,
+        [
+            "metadata_dir=/work/x",
+            "artifacts.training_dir=/work/y",
+            "nn_friend_tag=tag",
+        ],
+        True,
+    )
+
+    assert command[0] == "env/bin/python"
+    assert "status_file=status.json" in command
+    assert "/work" not in " ".join(command)
+    cfg = pm._compose(command[3:] + ["mode.channel=tt", "mode.fold=2"])
+    assert cfg.metadata_dir == "metadata"
+    assert cfg.artifacts.training_dir == "models/fold2of5/tt"
+    assert cfg.nn_friend_tag == "tag"
+    assert cfg.status_file == "status.json"
+
+
+def test_main_remote_submits(
+    metadata, tmp_path, training_dir, fake_condor, storage, monkeypatch
+):
+    checked = []
+    monkeypatch.setattr(pm, "check_shared_paths", checked.append)
+    log_dir = tmp_path / "run"
+
+    code = pm.main(_remote_args(metadata, tmp_path, training_dir))
+
+    assert code == 0
+    assert fake_condor == [log_dir / "submit.jdl"]
+    # Nothing has to be on a shared file system
+    assert checked == []
+    lines = (log_dir / "submit.jdl").read_text().splitlines()
+    assert "+RemoteJob = True" in lines
+    assert not any("ProvidesETPResources" in line for line in lines)
+
+    (bundle_url,) = storage
+    assert bundle_url.startswith(
+        "root://cmsdcache-kit-disk.gridka.de:1094//store/user/mmolch/xyh_ml/"
+        "sandboxes/bundle-"
+    )
+    script = (log_dir / "job.sh").read_text()
+    assert ENV_PACK_URL in script
+    assert bundle_url in script
+
+    manifest = json.loads((log_dir / "jobs.json").read_text())
+    assert manifest["sandbox"] == {
+        "environment_url": ENV_PACK_URL,
+        "bundle_url": bundle_url,
+    }
+    assert manifest["cluster"] == 77
+    names = (log_dir / "jobs.txt").read_text().splitlines()
+    arguments = (
+        (log_dir / "commands" / f"{names[0]}.args").read_text().splitlines()
+    )
+    assert arguments[0] == "env/bin/python"
+    assert "metadata_dir=metadata" in arguments
+    assert f"metadata_dir={metadata}" not in arguments
+    assert f"artifacts.training_dir=models/{TRAINING_DIR}" in arguments
+    assert "nn_friend_tag=tag" in arguments
+
+
+def test_main_remote_bundle_content(
+    metadata, tmp_path, training_dir, fake_condor, storage
+):
+    """Only the channels of the run, and the files the jobs need."""
+    args = _remote_args(metadata, tmp_path, training_dir)
+
+    assert pm.main(args) == 0
+
+    (content,) = storage.values()
+    with tarfile.open(fileobj=io.BytesIO(content)) as archive:
+        names = set(archive.getnames())
+    assert "src/xyh_ml/__init__.py" in names
+    assert "config/produce.yaml" in names
+    assert "metadata/2024/DY.json.gz" in names
+    assert "models/fold4of5/et/best_model.ckpt" in names
+    assert "models/fold0of5/et/transformations.pkl" in names
+    assert not any("/mt/" in name or "/tt/" in name for name in names)
+
+
+def test_main_remote_missing_model_fails_at_submission(
+    metadata, tmp_path, training_dir, fake_condor, storage, caplog
+):
+    (training_dir / "fold3of5" / "et" / "best_model.ckpt").unlink()
+
+    code = pm.main(_remote_args(metadata, tmp_path, training_dir))
+
+    assert code == 2
+    assert fake_condor == []
+    assert "best_model.ckpt" in caplog.text
+    assert storage == {}
+
+
+def test_main_remote_sandbox_dir_option(
+    metadata, tmp_path, training_dir, fake_condor, storage
+):
+    args = _remote_args(
+        metadata,
+        tmp_path,
+        training_dir,
+        "--sandbox-dir",
+        "root://other//store/mine",
+    )
+
+    assert pm.main(args) == 0
+
+    (bundle_url,) = storage
+    assert bundle_url.startswith("root://other//store/mine/bundle-")
+
+
+def test_main_remote_requirements_option(
+    metadata, tmp_path, training_dir, fake_condor, storage
+):
+    args = _remote_args(
+        metadata,
+        tmp_path,
+        training_dir,
+        "--condor-requirements",
+        'TARGET.CloudSite =?= "BwForCluster-Nemo2"',
+    )
+
+    assert pm.main(args) == 0
+
+    lines = (tmp_path / "run" / "submit.jdl").read_text().splitlines()
+    assert (
+        'requirements = (TARGET.CloudSite =?= "BwForCluster-Nemo2")' in lines
+    )
+
+
+def test_main_remote_needs_upload(
+    metadata, tmp_path, training_dir, fake_condor, storage, caplog
+):
+    args = _remote_args(metadata, tmp_path, training_dir)
+    args.remove("nn_friend_tag=tag")
+
+    assert pm.main(args) == 2
+    assert "nn_friend_tag" in caplog.text
+    assert fake_condor == []
+    assert storage == {}
+
+
+def test_main_remote_dry_run_writes_and_uploads_nothing(
+    metadata, tmp_path, training_dir, fake_condor, storage, capsys
+):
+    args = _remote_args(metadata, tmp_path, training_dir, "--dry-run")
+
+    assert pm.main(args) == 0
+
+    assert fake_condor == []
+    assert storage == {}
+    assert not (tmp_path / "run").exists()
+    assert "env/bin/python" in capsys.readouterr().out
+
+
+def test_main_remote_proxy_problem_uploads_nothing(
+    metadata, tmp_path, training_dir, fake_condor, storage, monkeypatch, caplog
+):
+    def no_proxy():
+        raise condor.CondorError("No valid proxy")
+
+    monkeypatch.setattr(pm, "check_proxy", no_proxy)
+
+    assert pm.main(_remote_args(metadata, tmp_path, training_dir)) == 2
+    assert storage == {}
+    assert "No valid proxy" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--gpus", "0"],
+        ["--profile"],
+        ["--sandbox-dir", "/work/local"],
+    ],
+)
+def test_main_remote_rejected_options(
+    metadata, tmp_path, training_dir, options
+):
+    with pytest.raises(SystemExit):
+        pm.main(_remote_args(metadata, tmp_path, training_dir, *options))
+
+
+def test_sandbox_dir_needs_remote(metadata, tmp_path):
+    with pytest.raises(SystemExit):
+        pm.main(
+            _args(
+                metadata,
+                tmp_path,
+                "--condor",
+                "--sandbox-dir",
+                "root://other//store/mine",
+            )
+        )
+
+
+def test_requirements_need_condor(metadata, tmp_path):
+    with pytest.raises(SystemExit):
+        pm.main(_args(metadata, tmp_path, "--condor-requirements", "x"))
+
+
+def test_collect_takes_no_remote_option(tmp_path):
+    with pytest.raises(SystemExit):
+        pm.main(["--collect", str(tmp_path), "--condor-remote"])
+
+
+def test_main_condor_does_not_use_sandbox(
+    metadata, tmp_path, fake_condor, monkeypatch
+):
+    def fail(*args):
+        raise AssertionError("no sandbox for local jobs")
+
+    monkeypatch.setattr(pm, "environment_pack", fail)
+    monkeypatch.setattr(pm, "job_bundle", fail)
+
+    assert pm.main(_args(metadata, tmp_path, "--condor")) == 0
+
+    manifest = json.loads((tmp_path / "run" / "jobs.json").read_text())
+    assert "sandbox" not in manifest
+
+
+def test_collect_of_remote_run(
+    metadata, tmp_path, training_dir, fake_condor, storage, monkeypatch
+):
+    """HTCondor copies the status files to the same place as in local runs."""
+    assert pm.main(_remote_args(metadata, tmp_path, training_dir)) == 0
+    log_dir = tmp_path / "run"
+    jobs = json.loads((log_dir / "jobs.json").read_text())["jobs"]
+    # First job complete, second job crashed with the placeholder status file
+    _report(log_dir, jobs[0], produced=jobs[0]["input_files"])
+    placeholder = log_dir / "status" / f"{pm.Job(**jobs[1]).name}.json"
+    placeholder.write_text("{}\n")
+    _states(monkeypatch)
+
+    assert pm.main(["--collect", str(log_dir)]) == 1
+
+    summary = _summary(log_dir)
+    assert (summary["n_jobs"], summary["n_failed"]) == (2, 1)
+    assert (log_dir / "failed_files.txt").read_text().splitlines() == (
+        jobs[1]["input_files"]
+    )

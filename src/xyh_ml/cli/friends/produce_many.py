@@ -47,6 +47,19 @@ proxy, and everything has to be on a shared file system::
 A job that fails is retried. A retry repeats all files of the job, unless
 ``--skip-existing`` is used, so this is recommended. Repeat the command with
 ``--skip-existing`` to submit what is still missing.
+
+With ``--condor-remote``, the jobs do not need the shared file systems, so they
+can also run at remote sites such as NEMO2. They fetch the environment and a
+bundle with code, models and metadata from grid storage, and the friends have to
+be uploaded with ``nn_friend_tag``. Both files are stored in ``--sandbox-dir`` and
+built only if needed; the environment pack is made with ``pixi-pack`` from the
+lock file of this repository, so run this from the ``cpu`` environment or another
+one with ``pixi-pack``. ``--collect`` works as for ``--condor``::
+
+    python -m xyh_ml.cli.friends.produce_many \\
+        --samples-file ../KingMaker/sample_lists/samples_2024_signal.txt \\
+        --campaign 2024_nano_v15 --n-files 30 --skip-existing --condor-remote \\
+        mode.decay_mode=y2b_h2tau inputs=y2b_h2tau nn_friend_tag=<tag>
 """
 
 import argparse
@@ -71,8 +84,10 @@ from omegaconf import DictConfig
 from xyh_ml import PROJECT_DIR
 from xyh_ml.friend_production.condor import (
     JOB_STATUS_HELD,
+    REMOTE_STATUS_FILE,
     CondorError,
     CondorOptions,
+    RemoteSandbox,
     check_proxy,
     check_shared_paths,
     job_states,
@@ -90,12 +105,19 @@ from xyh_ml.friend_production.metadata import (
 from xyh_ml.friend_production.paths import (
     campaign_name,
     default_output_file,
+    fold_training_dirs,
     list_directory,
     project_path,
     resolve_output_dir,
     select_campaigns,
 )
-from xyh_ml.friend_production.xrootd import is_xrootd_url
+from xyh_ml.friend_production.sandbox import (
+    METADATA_DIR,
+    MODELS_DIR,
+    environment_pack,
+    job_bundle,
+)
+from xyh_ml.friend_production.xrootd import is_xrootd_url, xrootd_url
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +136,15 @@ RESERVED_OVERRIDES = [
 
 # Overrides that are additionally set per job by the job script with --condor
 RESERVED_OVERRIDES_CONDOR = ["staging_dir"]
+
+# Overrides with paths on this machine, which are used to find the files for
+# the bundle of remote jobs, and are replaced in the commands of these jobs
+REMOTE_REPLACED_OVERRIDES = ["metadata_dir", "artifacts.training_dir"]
+
+# Paths in remote jobs, relative to the scratch directory where they run
+REMOTE_PYTHON = "env/bin/python"
+REMOTE_HYDRA_DIR = "hydra"
+REMOTE_MODEL_DIR = "fold${mode.fold}of${mode.n_folds}/${mode.channel}"
 
 # Result of a job that may still run, and the list of submitted jobs
 STATUS_UNFINISHED = "unfinished"
@@ -359,6 +390,33 @@ def job_command(
     )
 
 
+def remote_job_command(
+    job: Job,
+    overrides: list[str],
+    skip_existing: bool,
+) -> list[str]:
+    """Command running ``produce`` for ``job`` with the files of the bundle."""
+    kept = [
+        override
+        for override in overrides
+        if override_key(override) not in REMOTE_REPLACED_OVERRIDES
+    ]
+    return command_with_paths(
+        job,
+        [
+            *kept,
+            f"metadata_dir={METADATA_DIR}",
+            f"artifacts.training_dir={MODELS_DIR}/{REMOTE_MODEL_DIR}",
+        ],
+        skip_existing,
+        JobPaths(
+            python=REMOTE_PYTHON,
+            status_file=REMOTE_STATUS_FILE,
+            hydra_dir=REMOTE_HYDRA_DIR,
+        ),
+    )
+
+
 def check_command_length(command: list[str]):
     """Reject a command that the operating system would refuse to run."""
     longest = max(len(argument.encode()) for argument in command)
@@ -370,14 +428,18 @@ def check_command_length(command: list[str]):
         raise ValueError(msg)
 
 
+def override_key(override: str) -> str:
+    """Name of the config value set by a Hydra override."""
+    return override.split("=", 1)[0].lstrip("+~")
+
+
 def check_overrides(overrides: list[str], condor: bool = False):
     """Reject overrides that this script sets per job."""
     reserved = RESERVED_OVERRIDES + (
         RESERVED_OVERRIDES_CONDOR if condor else []
     )
     for override in overrides:
-        key = override.split("=", 1)[0].lstrip("+~")
-        if key in reserved:
+        if override_key(override) in reserved:
             msg = (
                 f"Override {override!r} is set per job by this script; use "
                 + "its options instead."
@@ -612,6 +674,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Submit the jobs to HTCondor instead of running them here.",
     )
     parser.add_argument(
+        "--condor-remote",
+        action="store_true",
+        help="Submit jobs to HTCondor that do not need the shared file "
+        + "systems, so that they can also run at remote sites. Needs "
+        + "nn_friend_tag.",
+    )
+    parser.add_argument(
+        "--sandbox-dir",
+        default=None,
+        metavar="URL",
+        help="XRootD directory for the environment and the bundle of jobs "
+        + "with --condor-remote (default: xyh_ml/sandboxes in the user "
+        + "directory of the ntuple server).",
+    )
+    parser.add_argument(
+        "--condor-requirements",
+        default=None,
+        metavar="EXPRESSION",
+        help="Additional HTCondor requirements, e.g. to select a site: "
+        + "'TARGET.CloudSite =?= \"BwForCluster-Nemo2\"'.",
+    )
+    parser.add_argument(
         "--collect",
         type=Path,
         default=None,
@@ -648,9 +732,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("overrides", nargs="*", help="Hydra overrides.")
     args = parser.parse_args(argv)
     if args.collect is not None:
-        if args.condor or args.sample or args.samples_file or args.overrides:
+        if (
+            args.condor
+            or args.condor_remote
+            or args.sample
+            or args.samples_file
+            or args.overrides
+        ):
             parser.error("--collect takes no further options.")
         return args
+    if args.condor_remote:
+        args.condor = True
+        if args.profile:
+            parser.error(
+                "--profile can not be used with --condor-remote, as profiles "
+                + "are not sent back."
+            )
+    if args.sandbox_dir is not None:
+        if not args.condor_remote:
+            parser.error("--sandbox-dir needs --condor-remote.")
+        if not is_xrootd_url(args.sandbox_dir):
+            parser.error("--sandbox-dir has to be an XRootD URL.")
+    if args.condor_requirements is not None and not args.condor:
+        parser.error(
+            "--condor-requirements needs --condor or --condor-remote."
+        )
     if args.condor and args.gpus is not None:
         parser.error("--gpus can not be used with --condor.")
     if args.jobs is None:
@@ -707,6 +813,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not isinstance(output_dir, str):
         output_dir = project_path(output_dir)
+    if args.condor_remote and not is_xrootd_url(output_dir):
+        logger.error(
+            "Jobs at remote sites can only upload their friends, so "
+            + "--condor-remote needs nn_friend_tag."
+        )
+        return 2
 
     names = [n for f in args.samples_file for n in read_samples_file(f)]
     selected, missing = select_samples(
@@ -747,7 +859,9 @@ def main(argv: list[str] | None = None) -> int:
     commands = [
         (
             job,
-            job_command(
+            remote_job_command(job, args.overrides, args.skip_existing)
+            if args.condor_remote
+            else job_command(
                 job, args.overrides, log_dir, args.skip_existing, args.profile
             ),
         )
@@ -876,6 +990,42 @@ def _write_results(
 # ------------------------------------------------------------------- HTCondor
 
 
+def default_sandbox_dir(cfg: DictConfig) -> str:
+    """``xyh_ml/sandboxes`` in the user directory of the ntuples on their
+    server, with a ``base_dir`` of the form ``/store/user/<name>/...``."""
+    user_dir = "/".join(cfg.ntuple.base_dir.split("/")[:4])
+    return xrootd_url(cfg.ntuple.xrootd_server, f"{user_dir}/xyh_ml/sandboxes")
+
+
+def _build_sandbox(
+    args: argparse.Namespace,
+    cfg: DictConfig,
+    jobs: list[Job],
+    metadata_dir: Path,
+) -> RemoteSandbox:
+    """Provide the files that remote jobs fetch from grid storage."""
+    sandbox_dir = args.sandbox_dir or default_sandbox_dir(cfg)
+    model_dirs = {
+        f"fold{fold}of{cfg.mode.n_folds}/{channel}": project_path(directory)
+        for channel in sorted({job.channel for job in jobs})
+        for fold, directory in fold_training_dirs(cfg, channel).items()
+    }
+    metadata_files = {}
+    for job in jobs:
+        for sample in job.samples:
+            path = metadata_path(metadata_dir, job.era, sample)
+            metadata_files[path.relative_to(metadata_dir).as_posix()] = path
+
+    # The bundle comes first, as it is quick and finds missing files
+    bundle_url = job_bundle(
+        sandbox_dir, PROJECT_DIR, model_dirs, metadata_files
+    )
+    return RemoteSandbox(
+        environment_url=environment_pack(sandbox_dir, PROJECT_DIR),
+        bundle_url=bundle_url,
+    )
+
+
 def _submit_jobs(
     args: argparse.Namespace,
     cfg: DictConfig,
@@ -885,17 +1035,24 @@ def _submit_jobs(
 ) -> int:
     """Check the prerequisites, write the files of the submission and submit
     it. Returns the cluster ID."""
-    paths = {
-        "Python interpreter": sys.executable,
-        "repository": PROJECT_DIR,
-        "log directory": log_dir,
-        "metadata": info["metadata_dir"],
-        "training artifacts": project_path(cfg.artifacts.training_dir),
-    }
-    if not is_xrootd_url(info["output_dir"]):
-        paths["output directory"] = info["output_dir"]
-    check_shared_paths(paths)
-    proxy = check_proxy()
+    jobs = [job for job, _ in commands]
+    sandbox = None
+    if args.condor_remote:
+        proxy = check_proxy()
+        sandbox = _build_sandbox(args, cfg, jobs, Path(info["metadata_dir"]))
+        info = info | {"sandbox": asdict(sandbox)}
+    else:
+        paths = {
+            "Python interpreter": sys.executable,
+            "repository": PROJECT_DIR,
+            "log directory": log_dir,
+            "metadata": info["metadata_dir"],
+            "training artifacts": project_path(cfg.artifacts.training_dir),
+        }
+        if not is_xrootd_url(info["output_dir"]):
+            paths["output directory"] = info["output_dir"]
+        check_shared_paths(paths)
+        proxy = check_proxy()
 
     log_dir.mkdir(parents=True, exist_ok=True)
     submit_file = write_submission(
@@ -911,13 +1068,15 @@ def _submit_jobs(
             accounting_group=args.accounting_group,
             max_materialize=args.jobs,
             threads_per_job=args.threads_per_job,
+            requirements=args.condor_requirements,
         ),
+        sandbox=sandbox,
     )
     cluster = submit(submit_file)
     manifest = info | {
         "cluster": cluster,
         "submit_host": socket.gethostname(),
-        "jobs": [asdict(job) for job, _ in commands],
+        "jobs": [asdict(job) for job in jobs],
     }
     (log_dir / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))
     return cluster
