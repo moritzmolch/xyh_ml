@@ -152,6 +152,251 @@ def test_job_script_passes_exit_code(tmp_path):
     assert result.returncode == 7
 
 
+# ---------------------------------------------------------------- remote jobs
+
+ENV_URL = "root://server//store/sandboxes/env-cpu-abc.sh"
+BUNDLE_URL = "root://server//store/sandboxes/bundle-def.tar.gz"
+SANDBOX = condor.RemoteSandbox(ENV_URL, BUNDLE_URL)
+
+
+def _write_remote(tmp_path, options=None, commands=None):
+    log_dir = tmp_path / "run"
+    log_dir.mkdir()
+    return condor.write_submission(
+        log_dir,
+        tmp_path / "not_used",
+        commands or {"job_a": ["env/bin/python", "-m", "x", OVERRIDE, "a b"]},
+        tmp_path / "proxy",
+        THREAD_VARIABLES,
+        options or condor.CondorOptions(threads_per_job=3),
+        sandbox=SANDBOX,
+    )
+
+
+def test_remote_submit_description(tmp_path):
+    lines = _write_remote(tmp_path).read_text().splitlines()
+    log_dir = tmp_path / "run"
+
+    for line in [
+        "+RemoteJob = True",
+        f"transfer_input_files = {log_dir}/commands/$(job).args",
+        "transfer_output_files = status.json",
+        f'transfer_output_remaps = "status.json = {log_dir}/status/$(job).json"',
+        f"x509userproxy = {tmp_path}/proxy",
+        f"executable = {log_dir}/job.sh",
+        "max_retries = 2",
+    ]:
+        assert line in lines
+    # Never together with +RemoteJob, as such a job would never match
+    assert not any("ProvidesETPResources" in line for line in lines)
+    assert not any(line.startswith("requirements") for line in lines)
+    assert (log_dir / "status").is_dir()
+
+
+def test_remote_extra_requirements(tmp_path):
+    options = condor.CondorOptions(requirements='TARGET.CloudSite =?= "x"')
+
+    lines = _write_remote(tmp_path, options).read_text().splitlines()
+
+    assert 'requirements = (TARGET.CloudSite =?= "x")' in lines
+    assert "+RemoteJob = True" in lines
+
+
+def test_local_extra_requirements(tmp_path):
+    options = condor.CondorOptions(requirements="TARGET.Cpus > 2")
+
+    lines = _write(tmp_path, options=options).read_text().splitlines()
+
+    assert (
+        "requirements = (TARGET.ProvidesETPResources =?= True) && "
+        "(TARGET.Cpus > 2)"
+    ) in lines
+
+
+def test_local_submit_description_unchanged(tmp_path):
+    """Local jobs keep the exact settings that were tested with real jobs."""
+    text = _write(tmp_path).read_text()
+
+    assert "RemoteJob" not in text
+    assert "transfer_input_files" not in text
+    assert "transfer_output_remaps" not in text
+    assert 'transfer_output_files = ""' in text.splitlines()
+    assert (
+        "requirements = (TARGET.ProvidesETPResources =?= True)"
+    ) in text.splitlines()
+    assert not (tmp_path / "status").exists()
+
+
+class FakeWorker:
+    """A scratch directory of a worker node with fake tools.
+
+    ``xrdcp`` copies from a directory of stored files, the pack creates the
+    environment with a fake Python, and the bundle holds a marker file.
+    """
+
+    def __init__(self, tmp_path, log_dir):
+        self.log_dir = log_dir
+        self.scratch = tmp_path / "scratch"
+        self.scratch.mkdir()
+        self.tools = tmp_path / "tools"
+        self.tools.mkdir()
+        self.store = tmp_path / "store"
+        self.store.mkdir()
+        self._tool(
+            "xrdcp",
+            f"""#!/bin/bash
+echo "xrdcp $*" >> {tmp_path}/xrdcp.log
+name="${{@: -2:1}}"
+cp "{self.store}/${{name##*/}}" "${{@: -1}}"
+""",
+        )
+        self._tool("sleep", "#!/bin/bash\n")
+        (self.store / "env-cpu-abc.sh").write_text(
+            """#!/bin/bash
+mkdir -p env/bin
+cat > env/bin/python <<'EOF'
+#!/bin/bash
+for a in "$@"; do echo "arg:$a"; done
+echo "cwd:$PWD"
+echo "home:$HOME"
+echo "tmp:$TMPDIR"
+echo "path:$PYTHONPATH"
+echo "activated:$ACTIVATED"
+echo "omp:$OMP_NUM_THREADS"
+ls src/marker
+echo '{"produced": ["x"], "skipped": [], "failed": []}' > status.json
+exit ${EXIT_CODE:-0}
+EOF
+chmod +x env/bin/python
+echo 'export ACTIVATED=yes' > activate.sh
+"""
+        )
+        source = tmp_path / "bundle_source"
+        (source / "src").mkdir(parents=True)
+        (source / "src" / "marker").write_text("")
+        subprocess.run(
+            [
+                "tar",
+                "-czf",
+                str(self.store / "bundle-def.tar.gz"),
+                "-C",
+                str(source),
+                "src",
+            ],
+            check=True,
+        )
+        # HTCondor transfers the executable and the command file
+        for name in ["job.sh", "commands/job_a.args"]:
+            source_file = log_dir / name
+            (self.scratch / source_file.name).write_text(
+                source_file.read_text()
+            )
+
+    def _tool(self, name, content):
+        path = self.tools / name
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def run(self, **env):
+        return subprocess.run(
+            ["bash", str(self.scratch / "job.sh"), "job_a"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=self.scratch,
+            env={
+                "PATH": f"{self.tools}:{os.environ['PATH']}",
+                "_CONDOR_SCRATCH_DIR": str(self.scratch),
+                **env,
+            },
+        )
+
+
+def test_remote_job_script_runs_command(tmp_path):
+    _write_remote(tmp_path)
+    worker = FakeWorker(tmp_path, tmp_path / "run")
+
+    result = worker.run()
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    scratch = worker.scratch
+    assert [ln[4:] for ln in lines if ln.startswith("arg:")] == [
+        "-m",
+        "x",
+        OVERRIDE,
+        "a b",
+        f"staging_dir={scratch}/staging",
+    ]
+    assert f"cwd:{scratch}" in lines
+    assert f"home:{scratch}" in lines
+    assert f"tmp:{scratch}/tmp" in lines
+    assert f"path:{scratch}/src" in lines
+    assert "activated:yes" in lines
+    assert "omp:3" in lines
+    # The fetched files are removed, to save disk
+    assert not (scratch / "environment.sh").exists()
+    assert not (scratch / "bundle.tar.gz").exists()
+    assert json.loads((scratch / "status.json").read_text())["produced"] == [
+        "x"
+    ]
+
+
+def test_remote_job_script_passes_exit_code(tmp_path):
+    _write_remote(tmp_path)
+    worker = FakeWorker(tmp_path, tmp_path / "run")
+
+    assert worker.run(EXIT_CODE="7").returncode == 7
+
+
+@pytest.mark.parametrize("name", ["env-cpu-abc.sh", "bundle-def.tar.gz"])
+def test_remote_job_script_failed_fetch_leaves_status_file(tmp_path, name):
+    """The status file exists, so that the job fails without going on hold."""
+    _write_remote(tmp_path)
+    worker = FakeWorker(tmp_path, tmp_path / "run")
+    (worker.store / name).unlink()
+
+    result = worker.run()
+
+    assert result.returncode != 0
+    assert json.loads((worker.scratch / "status.json").read_text()) == {}
+    # Every attempt is made
+    log = (tmp_path / "xrdcp.log").read_text()
+    assert log.count(name) == condor.FETCH_ATTEMPTS
+
+
+def test_remote_job_script_retries_fetch(tmp_path):
+    _write_remote(tmp_path)
+    worker = FakeWorker(tmp_path, tmp_path / "run")
+    (worker.tools / "xrdcp").write_text(
+        f"""#!/bin/bash
+echo "xrdcp $*" >> {tmp_path}/xrdcp.log
+if [ ! -e {tmp_path}/failed_once ]; then
+    touch {tmp_path}/failed_once
+    exit 1
+fi
+name="${{@: -2:1}}"
+cp "{worker.store}/${{name##*/}}" "${{@: -1}}"
+"""
+    )
+
+    result = worker.run()
+
+    assert result.returncode == 0, result.stderr
+    assert "Attempt 1 to fetch" in result.stderr
+
+
+def test_remote_job_script_failed_unpack(tmp_path):
+    _write_remote(tmp_path)
+    worker = FakeWorker(tmp_path, tmp_path / "run")
+    (worker.store / "env-cpu-abc.sh").write_text("exit 3\n")
+
+    result = worker.run()
+
+    assert result.returncode == 3
+    assert json.loads((worker.scratch / "status.json").read_text()) == {}
+
+
 # ------------------------------------------------------------- condor commands
 
 

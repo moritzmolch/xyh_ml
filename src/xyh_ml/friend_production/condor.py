@@ -1,9 +1,11 @@
 """Submission of friend production jobs to the ETP HTCondor pool.
 
-Jobs run at the ETP-local sites, where the shared file systems with the
-software, models and metadata are mounted. The arguments of a job are stored
-in a file, as the list of input files is too long for the ``arguments`` line
-of a submit file.
+By default, jobs run at the ETP-local sites, where the shared file systems
+with the software, models and metadata are mounted. With a
+:class:`RemoteSandbox`, jobs fetch all of this from grid storage, so that they
+can also run at remote sites. The arguments of a job are stored in a file, as
+the list of input files is too long for the ``arguments`` line of a submit
+file.
 
 This module does not import torch, so that planning jobs stays cheap.
 """
@@ -39,6 +41,13 @@ MEMORY_INCREASE_PER_START_MB = 2000
 HOLD_CODE_MEMORY = 34
 MAX_STARTS_AFTER_MEMORY_HOLD = 3
 
+# Name of the status file of a job at a remote site, in its scratch directory
+REMOTE_STATUS_FILE = "status.json"
+
+# Attempts to fetch a file at a remote site, and the time between them
+FETCH_ATTEMPTS = 3
+FETCH_RETRY_DELAY_S = 60
+
 # Minimum lifetime of the grid proxy at submission
 MIN_PROXY_LIFETIME_HOURS = 24
 
@@ -62,6 +71,16 @@ class CondorOptions:
     accounting_group: str = "cms.higgs"
     max_materialize: int = 100
     threads_per_job: int = 2
+    requirements: str | None = None
+
+
+@dataclass
+class RemoteSandbox:
+    """Files that jobs fetch from grid storage, as they do not rely on the
+    shared file systems."""
+
+    environment_url: str
+    bundle_url: str
 
 
 def proxy_path() -> Path:
@@ -150,10 +169,71 @@ exec "${{command[@]}}" "staging_dir=$_CONDOR_SCRATCH_DIR/staging"
 """
 
 
+def remote_job_script(
+    sandbox: RemoteSandbox,
+    thread_variables: list[str],
+    threads: int,
+) -> str:
+    """Executable of a job that does not rely on the shared file systems,
+    which gets the name of the job as argument and runs in scratch."""
+    threads_setup = "\n".join(
+        f"export {variable}={threads}" for variable in thread_variables
+    )
+    environment_url = shlex.quote(sandbox.environment_url)
+    bundle_url = shlex.quote(sandbox.bundle_url)
+    return f"""#!/bin/bash
+set -euo pipefail
+cd "$_CONDOR_SCRATCH_DIR"
+
+# A missing output file puts a job on hold, so this comes before anything can
+# fail. It does not list any file, so the job counts as failed until replaced.
+echo '{{}}' > {REMOTE_STATUS_FILE}
+
+echo "job:     $1"
+echo "host:    $(hostname)"
+echo "scratch: $_CONDOR_SCRATCH_DIR"
+
+export HOME="$_CONDOR_SCRATCH_DIR"
+export TMPDIR="$_CONDOR_SCRATCH_DIR/tmp"
+mkdir -p "$TMPDIR"
+{threads_setup}
+
+fetch() {{
+    for attempt in $(seq {FETCH_ATTEMPTS}); do
+        if xrdcp -f --nopbar "$1" "$2"; then
+            return 0
+        fi
+        echo "Attempt $attempt to fetch $1 failed" >&2
+        if [ "$attempt" -lt {FETCH_ATTEMPTS} ]; then
+            sleep {FETCH_RETRY_DELAY_S}
+        fi
+    done
+    return 1
+}}
+
+fetch {environment_url} environment.sh
+bash environment.sh -q -o "$PWD"
+rm -f environment.sh
+
+fetch {bundle_url} bundle.tar.gz
+tar -xzf bundle.tar.gz
+rm -f bundle.tar.gz
+
+# Only now, as the libraries of the environment could break xrdcp of the image
+source activate.sh
+export PYTHONPATH="$PWD/src"
+export PYTHONNOUSERSITE=1
+
+mapfile -t command < "$1".args
+exec "${{command[@]}}" "staging_dir=$_CONDOR_SCRATCH_DIR/staging"
+"""
+
+
 def submit_description(
     log_dir: Path,
     proxy: Path,
     options: CondorOptions,
+    remote: bool = False,
 ) -> str:
     """Content of the submit file, with one job per line of ``jobs.txt``."""
     memory = (
@@ -164,6 +244,19 @@ def submit_description(
         f"(HoldReasonCode == {HOLD_CODE_MEMORY}) && "
         + f"(NumJobStarts < {MAX_STARTS_AFTER_MEMORY_HOLD})"
     )
+    requirements = [] if remote else ["(TARGET.ProvidesETPResources =?= True)"]
+    if options.requirements:
+        requirements.append(f"({options.requirements})")
+    placement = "+RemoteJob = True\n" if remote else ""
+    if requirements:
+        placement += f"requirements = {' && '.join(requirements)}\n"
+    transfers = (
+        f"""transfer_input_files = {log_dir}/commands/$(job).args
+transfer_output_files = {REMOTE_STATUS_FILE}
+transfer_output_remaps = "{REMOTE_STATUS_FILE} = {log_dir}/status/$(job).json\""""
+        if remote
+        else 'transfer_output_files = ""'
+    )
     return f"""universe = container
 container_image = {CONTAINER_IMAGE}
 
@@ -171,8 +264,7 @@ executable = {log_dir}/job.sh
 arguments = $(job)
 batch_name = produce_many_{log_dir.name}
 
-requirements = (TARGET.ProvidesETPResources =?= True)
-accounting_group = {options.accounting_group}
+{placement}accounting_group = {options.accounting_group}
 request_cpus = {options.threads_per_job}
 request_memory = {memory}
 request_disk = {options.disk_gb}G
@@ -182,7 +274,7 @@ x509userproxy = {proxy}
 
 should_transfer_files = YES
 when_to_transfer_output = ON_EXIT
-transfer_output_files = ""
+{transfers}
 
 max_retries = {MAX_RETRIES}
 periodic_release = {release}
@@ -203,9 +295,14 @@ def write_submission(
     proxy: Path,
     thread_variables: list[str],
     options: CondorOptions,
+    sandbox: RemoteSandbox | None = None,
 ) -> Path:
     """Write all files of a submission to ``log_dir``, with the commands per
-    job name, and return the path of the submit file."""
+    job name, and return the path of the submit file.
+
+    With ``sandbox``, the jobs do not rely on the shared file systems, and
+    ``project_dir`` is not used.
+    """
     for name, command in commands.items():
         if any("\n" in argument for argument in command):
             raise CondorError(
@@ -221,16 +318,26 @@ def write_submission(
         )
     (log_dir / "jobs.txt").write_text("\n".join(commands) + "\n")
 
+    # HTCondor does not create the directory of the remapped status files
+    if sandbox is not None:
+        (log_dir / "status").mkdir(exist_ok=True)
+
     script = log_dir / "job.sh"
     script.write_text(
         job_script(
             project_dir, log_dir, thread_variables, options.threads_per_job
         )
+        if sandbox is None
+        else remote_job_script(
+            sandbox, thread_variables, options.threads_per_job
+        )
     )
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
 
     submit_file = log_dir / "submit.jdl"
-    submit_file.write_text(submit_description(log_dir, proxy, options))
+    submit_file.write_text(
+        submit_description(log_dir, proxy, options, remote=sandbox is not None)
+    )
     return submit_file
 
 
