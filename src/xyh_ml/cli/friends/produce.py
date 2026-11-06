@@ -32,6 +32,9 @@ from xyh_ml.friend_production.paths import (
     friend_exists,
     resolve_output_dir,
 )
+from xyh_ml.friend_production.paths import (
+    fold_training_dirs as _fold_training_dirs,
+)
 from xyh_ml.friend_production.profiling import Profiler
 from xyh_ml.friend_production.xrootd import is_xrootd_url, xrd_upload
 from xyh_ml.io import dump_json, load_transformations
@@ -491,22 +494,6 @@ def _warm_up_models(models: dict[int, torch.nn.Module], input_size: int):
             model.eval().to(device)(torch.zeros(1, input_size, device=device))
     if device == "cuda":
         torch.cuda.synchronize()
-
-
-def _fold_training_dirs(cfg: DictConfig) -> dict[int, Path]:
-    """Return the training directory of the model of each fold.
-
-    ``artifacts.training_dir`` is interpolated from ``mode.fold``, so it is
-    resolved again with ``mode.fold`` set to each fold.
-    """
-    return {
-        fold: Path(
-            OmegaConf.merge(
-                cfg, {"mode": {"fold": fold}}
-            ).artifacts.training_dir
-        )
-        for fold in range(cfg.mode.n_folds)
-    }
 
 
 def _load_fold_model(

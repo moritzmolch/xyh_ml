@@ -296,6 +296,45 @@ def status_file(log_dir: Path, job: Job) -> Path:
     return log_dir / "status" / f"{job.name}.json"
 
 
+@dataclass
+class JobPaths:
+    """Paths in the command of a job, as seen by the job."""
+
+    python: str | Path
+    status_file: str | Path
+    hydra_dir: str | Path
+    profile_file: str | Path | None = None
+
+
+def command_with_paths(
+    job: Job,
+    overrides: list[str],
+    skip_existing: bool,
+    paths: JobPaths,
+) -> list[str]:
+    """Command running ``produce`` for ``job`` with the given ``paths``.
+
+    The output of a job goes to its log file, so Hydra does not write its own
+    log and config files per job.
+    """
+    input_files = ",".join(f"'{f}'" for f in job.input_files)
+    command = [
+        str(paths.python),
+        "-m",
+        PRODUCE_MODULE,
+        *overrides,
+        f"input_files=[{input_files}]",
+        f"status_file={paths.status_file}",
+        f"skip_existing={str(skip_existing).lower()}",
+        f"hydra.run.dir={paths.hydra_dir}",
+        "hydra.output_subdir=null",
+        "hydra/job_logging=stdout",
+    ]
+    if paths.profile_file is not None:
+        command.append(f"profile_file={paths.profile_file}")
+    return command
+
+
 def job_command(
     job: Job,
     overrides: list[str],
@@ -304,29 +343,20 @@ def job_command(
     profile: bool,
     python: str = sys.executable,
 ) -> list[str]:
-    """Command running ``produce`` for ``job``.
-
-    The output of a job goes to its log file, so Hydra does not write its own
-    log and config files per job.
-    """
-    input_files = ",".join(f"'{f}'" for f in job.input_files)
-    command = [
-        python,
-        "-m",
-        PRODUCE_MODULE,
-        *overrides,
-        f"input_files=[{input_files}]",
-        f"status_file={status_file(log_dir, job)}",
-        f"skip_existing={str(skip_existing).lower()}",
-        f"hydra.run.dir={log_dir / 'hydra'}",
-        "hydra.output_subdir=null",
-        "hydra/job_logging=stdout",
-    ]
-    if profile:
-        command.append(
-            f"profile_file={log_dir / 'profiles' / f'{job.name}.json'}"
-        )
-    return command
+    """Command running ``produce`` for ``job`` on a shared file system."""
+    return command_with_paths(
+        job,
+        overrides,
+        skip_existing,
+        JobPaths(
+            python=python,
+            status_file=status_file(log_dir, job),
+            hydra_dir=log_dir / "hydra",
+            profile_file=(
+                log_dir / "profiles" / f"{job.name}.json" if profile else None
+            ),
+        ),
+    )
 
 
 def check_command_length(command: list[str]):

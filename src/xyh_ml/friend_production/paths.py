@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from XRootD.client import FileSystem
 
 from xyh_ml import PROJECT_DIR
@@ -31,6 +31,27 @@ def project_path(path: str | Path) -> Path:
     """``path`` relative to the repo root, where the jobs run."""
     path = Path(path)
     return path if path.is_absolute() else PROJECT_DIR / path
+
+
+def fold_training_dirs(
+    cfg: DictConfig,
+    channel: str | None = None,
+) -> dict[int, Path]:
+    """Return the training directory of the model of each fold.
+
+    ``artifacts.training_dir`` is interpolated from ``mode.fold``, so it is
+    resolved again with ``mode.fold`` set to each fold, and with
+    ``mode.channel`` set to ``channel``, if given.
+    """
+    channel_mode = {} if channel is None else {"channel": channel}
+    return {
+        fold: Path(
+            OmegaConf.merge(
+                cfg, {"mode": {"fold": fold, **channel_mode}}
+            ).artifacts.training_dir
+        )
+        for fold in range(cfg.mode.n_folds)
+    }
 
 
 def campaign_name(campaigns: list[Campaign], era: str) -> str:

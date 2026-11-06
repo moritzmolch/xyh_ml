@@ -1147,3 +1147,20 @@ def test_warm_up_models_moves_models_to_device_and_evaluates():
     for model in models.values():
         assert not model.training
         assert next(model.parameters()).device.type == produce._device()
+
+
+def test_fold_training_dirs_with_channel():
+    cfg = OmegaConf.create(
+        {
+            "mode": {"n_folds": 2, "fold": 1, "channel": "mt"},
+            "artifacts": {
+                "training_dir": (
+                    "out/fold${mode.fold}of${mode.n_folds}/${mode.channel}"
+                )
+            },
+        }
+    )
+
+    dirs = produce._fold_training_dirs(cfg, "tt")
+
+    assert dirs == {0: Path("out/fold0of2/tt"), 1: Path("out/fold1of2/tt")}
