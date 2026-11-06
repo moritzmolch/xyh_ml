@@ -2,6 +2,7 @@
 
 import subprocess
 import tarfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -160,6 +161,40 @@ def test_pixi_pack_missing(monkeypatch, tmp_path):
 def test_missing_lock_file(tmp_path, fake_pixi_pack):
     with pytest.raises(sandbox.SandboxError, match="lock file"):
         sandbox.environment_pack_name(tmp_path, tmp_path / "bin" / "pixi-pack")
+
+
+def test_source_distribution_in_lock_file(project, storage, fake_pixi_pack):
+    url = "https://files.pythonhosted.org/packages/antlr4-4.9.3.tar.gz"
+    (project / "pixi.lock").write_text(
+        f"""environments:
+  cpu:
+    packages:
+      - pypi: https://files.pythonhosted.org/packages/a-1.0-py3-none-any.whl
+      - pypi: {url}
+      - pypi: ./
+"""
+    )
+
+    with pytest.raises(sandbox.SandboxError, match="antlr4-4.9.3.tar.gz"):
+        sandbox.environment_pack(URL, project)
+    assert storage == {}
+
+
+def test_wheels_and_editable_install_in_lock_file():
+    sandbox.check_no_source_distributions(
+        """indexes:
+- https://pypi.org/simple
+packages:
+  - pypi: https://files.pythonhosted.org/packages/a-1.0-py3-none-any.whl
+  - pypi: ./
+"""
+    )
+
+
+def test_lock_file_of_the_repository_can_be_packed():
+    sandbox.check_no_source_distributions(
+        (Path(__file__).parents[2] / "pixi.lock").read_text()
+    )
 
 
 def test_storage_failure_is_reported(project, fake_pixi_pack, monkeypatch):

@@ -16,6 +16,7 @@ import gzip
 import hashlib
 import io
 import logging
+import re
 import subprocess
 import sys
 import tarfile
@@ -81,12 +82,33 @@ def _run(command: list[str]) -> str:
     return result.stdout
 
 
+def check_no_source_distributions(lock: str):
+    """Reject PyPI source distributions in the lock file.
+
+    The editable install of this package needs ``--ignore-pypi-non-wheel``,
+    but with it ``pixi-pack`` also leaves out source distributions without a
+    message, and all jobs would fail on the missing package.
+    """
+    sources = [
+        url
+        for url in re.findall(r"- pypi: (https?://\S+)", lock)
+        if not url.endswith(".whl")
+    ]
+    if sources:
+        raise SandboxError(
+            "The environment pack would miss these PyPI source distributions, "
+            + "so install them from conda instead:\n  "
+            + "\n  ".join(sorted(set(sources)))
+        )
+
+
 def environment_pack_name(project_dir: Path, binary: Path) -> str:
     """Name of the pack, which changes with the lock file and ``pixi-pack``."""
     try:
         lock = (project_dir / "pixi.lock").read_bytes()
     except OSError as e:
         raise SandboxError(f"Can not read the lock file: {e}") from e
+    check_no_source_distributions(lock.decode())
     version = _run([str(binary), "--version"])
     return (
         f"env-{ENVIRONMENT}-"
