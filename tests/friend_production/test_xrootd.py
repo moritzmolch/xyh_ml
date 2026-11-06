@@ -9,11 +9,8 @@ from xyh_ml.friend_production import xrootd
 from xyh_ml.friend_production.xrootd import (
     XRD_NOT_FOUND,
     DirectoryNotFoundError,
-    get_channel_dirs,
-    get_era_dirs,
     get_files,
     get_friend_files,
-    get_sample_dirs,
     is_xrootd_url,
     split_xrootd_url,
     xrd_exists,
@@ -65,24 +62,6 @@ def test_xrd_ls_missing_directory_raises_not_found(fake_fs_factory, caplog):
 
 def test_directory_not_found_error_is_runtime_error():
     assert issubclass(DirectoryNotFoundError, RuntimeError)
-
-
-def test_get_era_dirs(fake_fs_factory):
-    fs = fake_fs_factory({"/b/CROWNRun": ["2018", "2022"]})
-    assert get_era_dirs(fs, "/b") == {
-        "2018": "/b/CROWNRun/2018",
-        "2022": "/b/CROWNRun/2022",
-    }
-
-
-def test_get_sample_dirs(fake_fs_factory):
-    fs = fake_fs_factory({"/e": ["A", "B"]})
-    assert get_sample_dirs(fs, "/e") == {"A": "/e/A", "B": "/e/B"}
-
-
-def test_get_channel_dirs(fake_fs_factory):
-    fs = fake_fs_factory({"/s": ["et", "mt"]})
-    assert get_channel_dirs(fs, "/s") == {"et": "/s/et", "mt": "/s/mt"}
 
 
 def test_get_files_filters_root_and_sorts(fake_fs_factory):

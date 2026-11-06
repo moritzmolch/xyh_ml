@@ -41,39 +41,6 @@ def xrd_ls(xrd_fs: FileSystem, path: str, flags: DirListFlags | None = None):
     return [item.name for item in listing]
 
 
-def get_era_dirs(
-    xrd_fs: FileSystem,
-    base_dir: str,
-) -> dict[str, str]:
-    # Construct main NTuple directory path
-    main_ntuple_dir = os.path.join(base_dir, MAIN_NTUPLE_DIR_NAME)
-
-    # Get available eras from the directory listing of the main NTuple directory
-    listing = xrd_ls(xrd_fs, main_ntuple_dir)
-
-    return {era: os.path.join(main_ntuple_dir, era) for era in listing}
-
-
-def get_sample_dirs(
-    xrd_fs: FileSystem,
-    era_dir: str,
-) -> dict[str, str]:
-    # Get available samples from the directory listing of the era directory
-    listing = xrd_ls(xrd_fs, era_dir)
-
-    return {sample: os.path.join(era_dir, sample) for sample in listing}
-
-
-def get_channel_dirs(
-    xrd_fs: FileSystem,
-    sample_dir: str,
-) -> dict[str, str]:
-    # Get available channels from the directory listing of the sample directory
-    listing = xrd_ls(xrd_fs, sample_dir)
-
-    return {channel: os.path.join(sample_dir, channel) for channel in listing}
-
-
 def get_files(
     xrd_fs: FileSystem,
     channel_dir: str,

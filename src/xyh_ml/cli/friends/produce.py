@@ -1,7 +1,5 @@
 import contextlib
-import dataclasses
 import logging
-import re
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,11 +10,10 @@ import numpy as np
 import pandas as pd
 import torch
 import uproot
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from xyh_ml import PROJECT_DIR
 from xyh_ml.config.dataclasses import (
-    Campaign,
     Config,
     Network,
     OutputClass,
@@ -25,15 +22,22 @@ from xyh_ml.config.dataclasses import (
 from xyh_ml.data.data_frame import prepare_with_parameter_values
 from xyh_ml.data.torch import create_torch_dataset_for_evaluation
 from xyh_ml.friend_production.dataclasses import Chunk, FileSlice, Sample
-from xyh_ml.friend_production.profiling import Profiler
-from xyh_ml.friend_production.xrootd import (
-    FRIEND_NTUPLE_DIR_NAME,
-    is_xrootd_url,
-    xrd_exists,
-    xrd_upload,
-    xrootd_url,
+from xyh_ml.friend_production.metadata import (
+    select_input_file,  # noqa: F401  (part of the interface of this module)
+    select_input_files,
 )
-from xyh_ml.io import load_json, load_transformations
+from xyh_ml.friend_production.paths import (
+    campaign_name,
+    default_output_file,
+    friend_exists,
+    resolve_output_dir,
+)
+from xyh_ml.friend_production.paths import (
+    fold_training_dirs as _fold_training_dirs,
+)
+from xyh_ml.friend_production.profiling import Profiler
+from xyh_ml.friend_production.xrootd import is_xrootd_url, xrd_upload
+from xyh_ml.io import dump_json, load_transformations
 from xyh_ml.nn.mlp import create_multi_layer_perceptron_model
 from xyh_ml.nn.predictions import predict
 
@@ -492,22 +496,6 @@ def _warm_up_models(models: dict[int, torch.nn.Module], input_size: int):
         torch.cuda.synchronize()
 
 
-def _fold_training_dirs(cfg: DictConfig) -> dict[int, Path]:
-    """Return the training directory of the model of each fold.
-
-    ``artifacts.training_dir`` is interpolated from ``mode.fold``, so it is
-    resolved again with ``mode.fold`` set to each fold.
-    """
-    return {
-        fold: Path(
-            OmegaConf.merge(
-                cfg, {"mode": {"fold": fold}}
-            ).artifacts.training_dir
-        )
-        for fold in range(cfg.mode.n_folds)
-    }
-
-
 def _load_fold_model(
     training_dir: Path,
     input_size: int,
@@ -623,196 +611,6 @@ def write_friend_file(
     )
 
 
-def select_input_file(
-    samples: list[Sample],
-    input_file: str,
-) -> Sample:
-    """Find ``input_file`` among the main files of ``samples`` and return a
-    sample that only holds this main file and its friend files.
-
-    ``input_file`` is either the full path of a main file as stored in the
-    metadata or a trailing part of it (e.g. the path without the XRootD
-    server) that matches exactly one main file. Era, sample name and
-    analysis channel of the returned sample are those of the sample the file
-    belongs to.
-    """
-    exact = [
-        (sample, i)
-        for sample in samples
-        for i, main_file in enumerate(sample.main_files)
-        if main_file == input_file
-    ]
-    suffix = "/" + input_file.lstrip("/")
-    matches = exact or [
-        (sample, i)
-        for sample in samples
-        for i, main_file in enumerate(sample.main_files)
-        if main_file.endswith(suffix)
-    ]
-
-    if not matches:
-        msg = f"Input file {input_file} not found in the sample metadata."
-        logger.error(msg)
-        raise ValueError(msg)
-    if len(matches) > 1:
-        msg = (
-            f"Input file {input_file} matches several main files: "
-            + f"{[s.main_files[i] for s, i in matches]}."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-
-    sample, i = matches[0]
-    return _single_file_sample(sample, i)
-
-
-def _single_file_sample(sample: Sample, i: int) -> Sample:
-    """Copy of ``sample`` with only its ``i``-th main file and the
-    corresponding friend files."""
-    return dataclasses.replace(
-        sample,
-        main_files=[sample.main_files[i]],
-        friend_files={
-            name: [friend_file_list[i]]
-            for name, friend_file_list in sample.friend_files.items()
-        },
-    )
-
-
-def select_sample_files(
-    samples: list[Sample],
-    sample_name: str,
-    eras: list[str] | None = None,
-    channels: list[str] | None = None,
-) -> list[Sample]:
-    """Return one single-file sample (see :func:`select_input_file`) for
-    every main file of the sample ``sample_name``.
-
-    The sample usually exists for several eras and channels in the metadata;
-    all of them are included unless ``eras`` or ``channels`` restrict them.
-    """
-    selected = [
-        s
-        for s in samples
-        if s.sample == sample_name
-        and (eras is None or s.era in eras)
-        and (channels is None or s.channel in channels)
-    ]
-    if not selected:
-        available = sorted({s.sample for s in samples})
-        msg = (
-            f"Sample {sample_name} (eras {eras}, channels {channels}) not "
-            + f"found in the sample metadata. Available samples: {available}"
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-
-    return [
-        _single_file_sample(s, i)
-        for s in selected
-        for i in range(len(s.main_files))
-    ]
-
-
-def default_output_file(output_dir: Path | str, sample: Sample) -> Path | str:
-    """Output path mirroring the CROWN friend layout,
-    ``<output_dir>/<era>/<sample>/<channel>/<file name of the main file>``.
-
-    ``output_dir`` is a local directory or an XRootD URL (see
-    :func:`resolve_output_dir`); the output path is of the same kind.
-    """
-    (main_file,) = sample.main_files
-    file_name = main_file.rsplit("/", 1)[-1]
-    parts = [sample.era, sample.sample, sample.channel, file_name]
-    if is_xrootd_url(output_dir):
-        return "/".join([output_dir.rstrip("/"), *parts])
-    return Path(output_dir).joinpath(*parts)
-
-
-def resolve_output_dir(cfg: DictConfig) -> Path | str:
-    """Directory of the friend files.
-
-    Without ``nn_friend_tag``, the local ``output_dir``. With it, the friend
-    directory ``<nn_friend_tag>-<decay mode>`` next to the other friends of
-    the ntuples on the XRootD server (as URL)::
-
-        <xrootd_server>//<base_dir>/<ntuple tag>/CROWNFriend/<name>
-    """
-    tag = cfg.get("nn_friend_tag")
-    if tag is None:
-        return Path(cfg.output_dir)
-
-    tag = str(tag)
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", tag):
-        msg = (
-            f"Invalid nn_friend_tag {tag!r}: use letters, digits, '.', '_' "
-            + "and '-' only."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-
-    friend_name = f"{tag}-{cfg.mode.decay_mode}"
-    if friend_name in {f.name for f in cfg.ntuple.friends}:
-        msg = (
-            f"Friend {friend_name} is an input friend of the ntuples "
-            + "(ntuple.friends); choose another nn_friend_tag."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-
-    return xrootd_url(
-        cfg.ntuple.xrootd_server,
-        "/".join(
-            [
-                cfg.ntuple.base_dir.rstrip("/"),
-                cfg.ntuple.tag,
-                FRIEND_NTUPLE_DIR_NAME,
-                friend_name,
-            ]
-        ),
-    )
-
-
-def friend_exists(output_file: Path | str) -> bool:
-    """Whether the local or remote (XRootD URL) friend file exists."""
-    if is_xrootd_url(output_file):
-        return xrd_exists(output_file)
-    return Path(output_file).exists()
-
-
-def campaign_name(campaigns: list[Campaign], era: str) -> str:
-    """Name of the campaign of ``era``, as used for the ``campaign`` input."""
-    for campaign in campaigns:
-        if campaign.era == era:
-            return campaign.name
-    msg = f"No campaign defined for era {era}."
-    logger.error(msg)
-    raise ValueError(msg)
-
-
-def campaign_eras(campaigns: list[Campaign], names: list[str]) -> list[str]:
-    """Eras of the campaigns ``names``."""
-    eras = {campaign.name: campaign.era for campaign in campaigns}
-    unknown = [name for name in names if name not in eras]
-    if unknown:
-        msg = (
-            f"Unknown campaigns {unknown}. Defined campaigns: "
-            + f"{list(eras)}"
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-    return [eras[name] for name in names]
-
-
-def _as_list(value: str | ListConfig | None) -> list[str] | None:
-    """``None``, or the single value or list of values as a list."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return [value]
-    return [str(v) for v in value]
-
-
 def produce_friend(
     sample: Sample,
     output_file: Path,
@@ -924,63 +722,35 @@ def load_models(
     return models, transformations
 
 
-def _select_jobs(
-    cfg: DictConfig, samples: list[Sample]
-) -> list[tuple[Sample, Path | str]]:
-    """Single-file samples to process and their output files, either for
-    ``input_file`` or for all files of ``sample``."""
-    if (cfg.input_file is None) == (cfg.sample is None):
-        msg = "Exactly one of input_file and sample has to be set."
+def _resolve_input_files(cfg: DictConfig) -> list[tuple[Sample, Path | str]]:
+    """Single-file samples of ``input_files`` and their output files."""
+    input_files = cfg.input_files
+    if isinstance(input_files, str):
+        input_files = [input_files]
+    if not input_files:
+        msg = "input_files is empty, nothing to do."
         logger.error(msg)
         raise ValueError(msg)
 
-    if cfg.output_file and cfg.get("nn_friend_tag") is not None:
-        msg = (
-            "output_file can not be set together with nn_friend_tag, which "
-            + "determines the output directory on the XRootD server."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-
-    campaigns = _as_list(cfg.campaign)
-    channels = _as_list(cfg.channel)
-
-    if cfg.input_file is not None:
-        if campaigns is not None or channels is not None:
-            msg = (
-                "campaign and channel can not be set together with "
-                + "input_file; they are taken from the input file."
-            )
-            logger.error(msg)
-            raise ValueError(msg)
-        file_samples = [select_input_file(samples, cfg.input_file)]
-    else:
-        if cfg.output_file:
-            msg = (
-                "output_file can only be set together with input_file; the "
-                + "output files of a sample are placed in output_dir."
-            )
-            logger.error(msg)
-            raise ValueError(msg)
-        file_samples = select_sample_files(
-            samples,
-            cfg.sample,
-            eras=None
-            if campaigns is None
-            else campaign_eras(cfg.campaigns, campaigns),
-            channels=channels,
-        )
-
+    samples = select_input_files(Path(cfg.metadata_dir), input_files)
     output_dir = resolve_output_dir(cfg)
     return [
-        (
-            file_sample,
-            Path(cfg.output_file)
-            if cfg.output_file
-            else default_output_file(output_dir, file_sample),
-        )
-        for file_sample in file_samples
+        (sample, default_output_file(output_dir, sample)) for sample in samples
     ]
+
+
+def _write_status(
+    status_file: str,
+    produced: list[str],
+    skipped: list[str],
+    failed: list[str],
+):
+    """Write the input files per outcome for ``produce_many``."""
+    path = Path(status_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dump_json(
+        path, {"produced": produced, "skipped": skipped, "failed": failed}
+    )
 
 
 @hydra.main(
@@ -989,13 +759,13 @@ def _select_jobs(
     version_base="1.3",
 )
 def main(cfg: Config):
-    # Find the input files in the sample metadata. Done first to fail early.
-    samples = [Sample.from_dict(s) for s in load_json(Path(cfg.metadata_file))]
-    jobs = _select_jobs(cfg, samples)
+    # Find all input files in the sample metadata. Done first to fail early.
+    jobs = _resolve_input_files(cfg)
     logger.info(f"Producing friends for {len(jobs)} input file(s)")
 
     # Skip input files whose friend file exists already. Friend files are
     # only moved (or uploaded) to their output path when complete.
+    skipped = []
     if cfg.skip_existing:
         exists = [friend_exists(output_file) for _, output_file in jobs]
         for (sample, output_file), e in zip(jobs, exists, strict=True):
@@ -1003,7 +773,15 @@ def main(cfg: Config):
                 logger.info(
                     f"Skipping {sample.main_files[0]}: {output_file} exists"
                 )
+                skipped.append(sample.main_files[0])
         jobs = [job for job, e in zip(jobs, exists, strict=True) if not e]
+
+    # Nothing left to do: do not load models or initialize the GPU
+    if not jobs:
+        logger.info("All friend files exist, nothing to do")
+        if cfg.status_file:
+            _write_status(cfg.status_file, [], skipped, [])
+        return
 
     # The analysis channel is that of the input file; load the models trained
     # for every channel that occurs (mode.channel is not used)
@@ -1017,6 +795,7 @@ def main(cfg: Config):
 
     parameter_values = pd.DataFrame.from_records(cfg.parameter_values)
     columns = input_columns(cfg)
+    produced = []
     failed = []
 
     # Friends for the XRootD server are written to a local staging directory
@@ -1060,16 +839,18 @@ def main(cfg: Config):
                     f"Failed to produce friend for {sample.main_files[0]}"
                 )
                 failed.append(sample.main_files[0])
+            else:
+                produced.append(sample.main_files[0])
 
     # Report time per event and per row and the memory usage, summed over
     # all files
     profiler.log_summary()
     if cfg.profile_file:
         profiler.dump(Path(cfg.profile_file))
+    if cfg.status_file:
+        _write_status(cfg.status_file, produced, skipped, failed)
 
-    logger.info(
-        f"Produced {len(jobs) - len(failed)} of {len(jobs)} friend file(s)"
-    )
+    logger.info(f"Produced {len(produced)} of {len(jobs)} friend file(s)")
     if failed:
         msg = f"Failed to produce friends for {len(failed)} file(s): {failed}"
         logger.error(msg)
