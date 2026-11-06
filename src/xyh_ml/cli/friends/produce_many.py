@@ -30,6 +30,23 @@ repeating the command. Every job writes its output to
 ``<log-dir>/logs/<job>.log``; the summary of all jobs is written to
 ``<log-dir>/summary.json`` and the input files without friend to
 ``<log-dir>/failed_files.txt``.
+
+With ``--condor``, the jobs are submitted to the ETP-local sites of the HTCondor
+pool on CPU slots instead of running on this machine. This needs a valid grid
+proxy, and everything has to be on a shared file system::
+
+    python -m xyh_ml.cli.friends.produce_many \\
+        --samples-file ../KingMaker/sample_lists/samples_2024_signal.txt \\
+        --campaign 2024_nano_v15 --n-files 30 --skip-existing --condor \\
+        mode.decay_mode=y2b_h2tau inputs=y2b_h2tau nn_friend_tag=<tag>
+
+    # Afterwards, on the same machine: write the summary and list the failures
+    python -m xyh_ml.cli.friends.produce_many \\
+        --collect output/produce_many/<timestamp>
+
+A job that fails is retried. A retry repeats all files of the job, unless
+``--skip-existing`` is used, so this is recommended. Repeat the command with
+``--skip-existing`` to submit what is still missing.
 """
 
 import argparse
@@ -38,6 +55,7 @@ import logging
 import os
 import queue
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -51,6 +69,16 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig
 
 from xyh_ml import PROJECT_DIR
+from xyh_ml.friend_production.condor import (
+    JOB_STATUS_HELD,
+    CondorError,
+    CondorOptions,
+    check_proxy,
+    check_shared_paths,
+    job_states,
+    submit,
+    write_submission,
+)
 from xyh_ml.friend_production.dataclasses import Sample
 from xyh_ml.friend_production.metadata import (
     available_samples,
@@ -67,6 +95,7 @@ from xyh_ml.friend_production.paths import (
     resolve_output_dir,
     select_campaigns,
 )
+from xyh_ml.friend_production.xrootd import is_xrootd_url
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +111,17 @@ RESERVED_OVERRIDES = [
     "hydra.output_subdir",
     "hydra/job_logging",
 ]
+
+# Overrides that are additionally set per job by the job script with --condor
+RESERVED_OVERRIDES_CONDOR = ["staging_dir"]
+
+# Result of a job that may still run, and the list of submitted jobs
+STATUS_UNFINISHED = "unfinished"
+MANIFEST_NAME = "jobs.json"
+
+# Number of jobs at the same time, by default
+DEFAULT_JOBS_LOCAL = 4
+DEFAULT_JOBS_CONDOR = 100
 
 # Limit of the operating system for the length of one command line argument
 # (MAX_ARG_STRLEN on Linux)
@@ -300,11 +340,14 @@ def check_command_length(command: list[str]):
         raise ValueError(msg)
 
 
-def check_overrides(overrides: list[str]):
+def check_overrides(overrides: list[str], condor: bool = False):
     """Reject overrides that this script sets per job."""
+    reserved = RESERVED_OVERRIDES + (
+        RESERVED_OVERRIDES_CONDOR if condor else []
+    )
     for override in overrides:
         key = override.split("=", 1)[0].lstrip("+~")
-        if key in RESERVED_OVERRIDES:
+        if key in reserved:
             msg = (
                 f"Override {override!r} is set per job by this script; use "
                 + "its options instead."
@@ -487,8 +530,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-j",
         "--jobs",
         type=int,
-        default=4,
-        help="Number of jobs running at the same time (default: 4).",
+        default=None,
+        help="Number of jobs running at the same time (default: "
+        + f"{DEFAULT_JOBS_LOCAL}), or in the queue with --condor (default: "
+        + f"{DEFAULT_JOBS_CONDOR}).",
     )
     parser.add_argument(
         "--n-files",
@@ -531,8 +576,55 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Only list the jobs and their commands.",
     )
+    parser.add_argument(
+        "--condor",
+        action="store_true",
+        help="Submit the jobs to HTCondor instead of running them here.",
+    )
+    parser.add_argument(
+        "--collect",
+        type=Path,
+        default=None,
+        metavar="LOG_DIR",
+        help="Evaluate a run submitted with --condor: write the summary and "
+        + "the failed files. Takes no further options.",
+    )
+    parser.add_argument(
+        "--condor-memory",
+        type=int,
+        default=CondorOptions.memory_mb,
+        metavar="MB",
+        help="Memory per job (default: %(default)s), increased at restarts.",
+    )
+    parser.add_argument(
+        "--condor-disk",
+        type=int,
+        default=CondorOptions.disk_gb,
+        metavar="GB",
+        help="Scratch disk per job (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--condor-walltime",
+        type=float,
+        default=CondorOptions.walltime_hours,
+        metavar="HOURS",
+        help="Runtime per job (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--accounting-group",
+        default=CondorOptions.accounting_group,
+        help="HTCondor accounting group (default: %(default)s).",
+    )
     parser.add_argument("overrides", nargs="*", help="Hydra overrides.")
     args = parser.parse_args(argv)
+    if args.collect is not None:
+        if args.condor or args.sample or args.samples_file or args.overrides:
+            parser.error("--collect takes no further options.")
+        return args
+    if args.condor and args.gpus is not None:
+        parser.error("--gpus can not be used with --condor.")
+    if args.jobs is None:
+        args.jobs = DEFAULT_JOBS_CONDOR if args.condor else DEFAULT_JOBS_LOCAL
     if not args.sample and not args.samples_file:
         parser.error("Select samples with --sample and/or --samples-file.")
     if args.n_files < 1:
@@ -560,8 +652,15 @@ def main(argv: list[str] | None = None) -> int:
         format="[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
     )
     args = _parse_args(argv)
+    if args.collect is not None:
+        try:
+            return collect(args.collect)
+        except CondorError as e:
+            logger.error(e)
+            return 2
+
     try:
-        check_overrides(args.overrides)
+        check_overrides(args.overrides, condor=args.condor)
     except ValueError as e:
         logger.error(e)
         return 2
@@ -647,6 +746,26 @@ def main(argv: list[str] | None = None) -> int:
         print("  " + " ".join(commands[0][1]))
         return 0
 
+    info = {
+        "overrides": args.overrides,
+        "metadata_dir": str(metadata_dir),
+        "output_dir": str(output_dir),
+        "n_files_per_job": args.n_files,
+    }
+    if args.condor:
+        try:
+            cluster = _submit_jobs(args, cfg, commands, log_dir, info)
+        except CondorError as e:
+            logger.error(e)
+            return 2
+        logger.info(
+            f"Submitted {len(jobs)} jobs to cluster {cluster}, logs in "
+            + f"{log_dir}. Monitor with: condor_q {cluster}. When finished, "
+            + "run this script with --collect "
+            + f"{log_dir}"
+        )
+        return 0
+
     if args.gpus is None:
         gpus = _default_gpus()
     elif args.gpus.lower() == "none":
@@ -664,13 +783,37 @@ def main(argv: list[str] | None = None) -> int:
     results = runner.run(commands)
     duration = time.perf_counter() - start
 
+    failed, _ = _write_results(
+        results, jobs, log_dir, info | {"duration_s": duration}
+    )
+    logger.info(
+        f"{len(results) - len(failed)}/{len(results)} jobs succeeded in "
+        + f"{duration / 60:.1f} min; summary: {log_dir / 'summary.json'}"
+    )
+    return 1 if failed else 0
+
+
+def _write_results(
+    results: list[JobResult],
+    jobs: list[Job],
+    log_dir: Path,
+    info: dict,
+) -> tuple[list[JobResult], list[str]]:
+    """Write ``summary.json`` and ``failed_files.txt`` and report failures.
+
+    Returns the jobs that failed and the input files without friend. Unfinished
+    jobs (``--collect``) do not count as failed.
+    """
     jobs_by_name = {job.name: job for job in jobs}
-    failed = [r for r in results if r.status != "ok"]
+    finished = [r for r in results if r.status != STATUS_UNFINISHED]
+    failed = [r for r in finished if r.status != "ok"]
     summary_jobs = []
     missing_friends = []
     for result in results:
         job = jobs_by_name[result.name]
-        job_failed_files = failed_files(job, result, log_dir)
+        job_failed_files = (
+            failed_files(job, result, log_dir) if result in finished else []
+        )
         missing_friends.extend(job_failed_files)
         summary_jobs.append(
             asdict(result)
@@ -679,34 +822,163 @@ def main(argv: list[str] | None = None) -> int:
                 "failed_files": job_failed_files,
             }
         )
-    summary = {
-        "overrides": args.overrides,
-        "metadata_dir": str(metadata_dir),
-        "output_dir": str(output_dir),
-        "duration_s": duration,
-        "n_files_per_job": args.n_files,
+    summary = info | {
         "n_jobs": len(results),
         "n_failed": len(failed),
-        "n_files": len(files),
+        "n_files": sum(len(job.input_files) for job in jobs),
         "n_failed_files": len(missing_friends),
         "jobs": summary_jobs,
     }
     (log_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
-    logger.info(
-        f"{len(results) - len(failed)}/{len(results)} jobs succeeded in "
-        + f"{duration / 60:.1f} min; summary: {log_dir / 'summary.json'}"
-    )
+    failed_list = log_dir / "failed_files.txt"
+    failed_list.unlink(missing_ok=True)
     if failed:
-        failed_list = log_dir / "failed_files.txt"
         failed_list.write_text("".join(f"{f}\n" for f in missing_friends))
         logger.error(
             f"{len(failed)} jobs failed, {len(missing_friends)} files without "
             + f"friend ({failed_list}):\n"
             + "\n".join(f"  {r.name}: {r.log_file}" for r in failed)
         )
-        return 1
-    return 0
+    return failed, missing_friends
+
+
+# ------------------------------------------------------------------- HTCondor
+
+
+def _submit_jobs(
+    args: argparse.Namespace,
+    cfg: DictConfig,
+    commands: list[tuple[Job, list[str]]],
+    log_dir: Path,
+    info: dict,
+) -> int:
+    """Check the prerequisites, write the files of the submission and submit
+    it. Returns the cluster ID."""
+    paths = {
+        "Python interpreter": sys.executable,
+        "repository": PROJECT_DIR,
+        "log directory": log_dir,
+        "metadata": info["metadata_dir"],
+        "training artifacts": project_path(cfg.artifacts.training_dir),
+    }
+    if not is_xrootd_url(info["output_dir"]):
+        paths["output directory"] = info["output_dir"]
+    check_shared_paths(paths)
+    proxy = check_proxy()
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    submit_file = write_submission(
+        log_dir,
+        PROJECT_DIR,
+        {job.name: command for job, command in commands},
+        proxy,
+        THREAD_VARIABLES,
+        CondorOptions(
+            memory_mb=args.condor_memory,
+            disk_gb=args.condor_disk,
+            walltime_hours=args.condor_walltime,
+            accounting_group=args.accounting_group,
+            max_materialize=args.jobs,
+            threads_per_job=args.threads_per_job,
+        ),
+    )
+    cluster = submit(submit_file)
+    manifest = info | {
+        "cluster": cluster,
+        "submit_host": socket.gethostname(),
+        "jobs": [asdict(job) for job, _ in commands],
+    }
+    (log_dir / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))
+    return cluster
+
+
+def _status_is_ok(job: Job, log_dir: Path) -> bool:
+    """Whether the status file of ``job`` reports a friend for all files."""
+    try:
+        status = json.loads(status_file(log_dir, job).read_text())
+        done = set(status["produced"]) | set(status["skipped"])
+    except (OSError, ValueError, KeyError):
+        return False
+    return done.issuperset(job.input_files)
+
+
+def collect(log_dir: Path) -> int:
+    """Evaluate a run submitted with ``--condor``.
+
+    Writes the same summary as a local run. Jobs without complete result count
+    as unfinished as long as the cluster is active, and as failed afterwards.
+    """
+    log_dir = log_dir.absolute()
+    manifest_file = log_dir / MANIFEST_NAME
+    try:
+        manifest = json.loads(manifest_file.read_text())
+    except (OSError, ValueError) as e:
+        raise CondorError(f"Can not read {manifest_file}: {e}") from e
+
+    # Cluster IDs are only valid on the machine of the submission
+    host = socket.gethostname()
+    if manifest["submit_host"] != host:
+        raise CondorError(
+            f"The jobs were submitted on {manifest['submit_host']}, run this "
+            + f"on that machine instead of {host}."
+        )
+
+    jobs = [Job(**job) for job in manifest["jobs"]]
+    states, active = job_states(manifest["cluster"])
+
+    results = []
+    held = []
+    for proc_id, job in enumerate(jobs):
+        if states.get(proc_id) == JOB_STATUS_HELD:
+            held.append(job.name)
+        if proc_id in states or (
+            active and not status_file(log_dir, job).exists()
+        ):
+            status = STATUS_UNFINISHED
+        else:
+            status = "ok" if _status_is_ok(job, log_dir) else "failed"
+        results.append(
+            JobResult(
+                name=job.name,
+                status=status,
+                returncode=None,
+                duration_s=0.0,
+                log_file=str(log_dir / "logs" / f"{job.name}.err"),
+                gpu=None,
+                command=[],
+            )
+        )
+
+    info = {
+        key: manifest[key]
+        for key in [
+            "overrides",
+            "metadata_dir",
+            "output_dir",
+            "n_files_per_job",
+            "cluster",
+        ]
+    }
+    failed, _ = _write_results(results, jobs, log_dir, info)
+
+    unfinished = [r for r in results if r.status == STATUS_UNFINISHED]
+    n_ok = len(results) - len(failed) - len(unfinished)
+    logger.info(
+        f"Cluster {manifest['cluster']}: {n_ok} jobs ok, {len(failed)} "
+        + f"failed, {len(unfinished)} unfinished; summary: "
+        + f"{log_dir / 'summary.json'}"
+    )
+    if held:
+        logger.warning(
+            f"{len(held)} jobs are held, see condor_q "
+            + f"{manifest['cluster']} -hold: {held}"
+        )
+    if unfinished:
+        logger.warning(
+            "The cluster is not finished, so this result is preliminary."
+        )
+    return 1 if failed or unfinished else 0
 
 
 if __name__ == "__main__":
