@@ -21,9 +21,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# TODO hotfix: "latest" currently fails
 CONTAINER_IMAGE = (
     "/cvmfs/unpacked.cern.ch/registry.hub.docker.com/"
-    "cverstege/alma9-gridjob:latest"
+    "cverstege/alma9-gridjob:20261007-1"
 )
 
 # File systems mounted at the ETP-local sites
@@ -66,7 +67,7 @@ class CondorOptions:
     """Resources and scheduling of the jobs."""
 
     memory_mb: int = 4000
-    disk_gb: int = 5
+    disk_gb: int = 15
     walltime_hours: float = 6.0
     accounting_group: str = "cms.higgs"
     max_materialize: int = 100
