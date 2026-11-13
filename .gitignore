@@ -234,3 +234,8 @@ notebooks_dev/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# Ignore claude directories except for custom skills and agents
+.claude
+!.claude/agents
+!.claude/skills
