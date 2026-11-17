@@ -143,23 +143,36 @@ def test_plot_coefficients_show_intervals(show_intervals):
     )
     try:
         labels = [t.get_text() for t in ax.get_legend().get_texts()]
-        has_intervals = any("interval" in label for label in labels)
-        assert has_intervals == show_intervals
         assert not any("95%" in label for label in labels)
+        percentile_labels = [
+            "16% percentile",
+            "50% percentile",
+            "84% percentile",
+        ]
         if show_intervals:
-            assert "68% interval (one-sided)" in labels
-            assert "0–16% quantile" in labels
+            # One-sided intervals are drawn as three stacked boxes
+            for label in percentile_labels:
+                assert label in labels
             boxes = [p for p in ax.patches if p.get_width() > 0]
-            assert len(boxes) == 2 * len(names)
-            lower, upper = boxes[: len(names)], boxes[len(names) :]
-            assert lower[0].get_facecolor() != upper[0].get_facecolor()
-            for low, up, (_, row) in zip(lower, upper, summary.iterrows()):
-                assert low.get_y() == 0.0
-                assert low.get_height() == pytest.approx(row["q_low_68"])
-                assert up.get_y() == pytest.approx(row["q_low_68"])
-                assert up.get_y() + up.get_height() == pytest.approx(
-                    row["q_68"]
+            assert len(boxes) == 3 * len(names)
+            n = len(names)
+            first, second, third = boxes[:n], boxes[n : 2 * n], boxes[2 * n :]
+            assert len({b[0].get_alpha() for b in (first, second, third)}) == 3
+            for lo, mid, up, (_, row) in zip(
+                first, second, third, summary.iterrows()
+            ):
+                assert lo.get_y() == 0.0
+                assert lo.get_height() == pytest.approx(row["q_low_68"])
+                assert mid.get_y() == pytest.approx(row["q_low_68"])
+                assert mid.get_y() + mid.get_height() == pytest.approx(
+                    row["median"]
                 )
+                assert up.get_y() == pytest.approx(row["median"])
+                assert up.get_y() + up.get_height() == pytest.approx(
+                    row["q_high_68"]
+                )
+        else:
+            assert not any(label in labels for label in percentile_labels)
         assert ax.get_ylim()[0] == 0.0
         assert ax.get_ylabel() == "|Taylor coefficient|"
     finally:

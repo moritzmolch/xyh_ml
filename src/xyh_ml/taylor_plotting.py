@@ -148,7 +148,7 @@ def _plot_intervals(
             np.zeros(len(summary)),
             q_16,
             color,
-            "16% quantile",
+            "16% percentile",
             alpha=0.8,
         )
         _draw_boxes(
