@@ -43,6 +43,18 @@ python -m xyh_ml.cli.plot_output_class_fractions $M mode.fold=0
 python -m xyh_ml.cli.plot_event_yields $M mode.fold=0
 # 4b. Same plots with the predictions of all folds merged (needs step 3 for every fold; file suffix allfoldsof<n_folds>)
 python -m xyh_ml.cli.plot_efficiencies $M plotting.merge_folds=true
+# 5. Taylor coefficients (1st + 2nd order of every softmax node w.r.t. the transformed input variables; m_x/m_y only
+#    with taylor.include_parameters=true) on a subsample of the
+#    held-out fold at the benchmark mass points taylor.mass_points (config/base/taylor.yaml) -> taylor_dir (ceph)
+python -m xyh_ml.cli.evaluate_taylor_coefficients $M mode.fold=0
+# 6. TC plots (median of |TC| with one-sided 68% interval [0, q68], sorted) of node c for events with true = predicted class c,
+#    per class/mass point, all eras and all folds pooled (needs step 5
+#    for every fold) -> data/output/<training_tag>/plots/taylor/
+python -m xyh_ml.cli.plot_taylor_coefficients $M
+# 7. Best TC rank of every input variable (1st order or part of a 2nd-order TC) over all class/mass point sets of the
+#    channels taylor.ranking_channels (missing ones skipped; mode.channel is ignored) -> Markdown/CSV tables in
+#    data/output/<training_tag>/tables/taylor/
+python -m xyh_ml.cli.rank_taylor_variables mode.decay_mode=y2b_h2tau inputs=y2b_h2tau
 ```
 
 Each step consumes the previous step's files, so run in order. The plot scripts read the predictions file of the selected tag/mode/fold/channel from `predictions_dir` (with `plotting.merge_folds=true`: of all folds, each event scored by the model not trained on it, `reduction_rate` multiplied by `n_folds`), so run them per channel with the same overrides.

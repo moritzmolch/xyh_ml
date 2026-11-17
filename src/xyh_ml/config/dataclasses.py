@@ -45,6 +45,7 @@ class Artifacts:
     data_frame_dir: str
     training_dir: str
     predictions_dir: str
+    taylor_dir: str | None = field(default=None)
 
 
 @dataclass
@@ -65,6 +66,29 @@ class Mode:
 @dataclass
 class Plotting:
     merge_folds: bool = field(default=False)
+
+
+@dataclass
+class Taylor:
+    # Benchmark (m_x, m_y) hypotheses the Taylor coefficients are evaluated at
+    mass_points: list[list[float]]
+    n_samples_per_category: int | None = field(default=5000)
+    batch_size: int = field(default=4096)
+    max_order: int = field(default=2)
+    # Compute/plot TCs with respect to the input parameters (m_x, m_y) too
+    include_parameters: bool = field(default=False)
+    # Number of coefficients with the largest (absolute) median to plot per
+    # output node, true class and mass point (None: all)
+    max_coefficients: int | None = field(default=45)
+    per_plot: int = field(default=15)
+    # Summarize and rank the absolute values of the coefficients
+    absolute: bool = field(default=True)
+    # Draw the 68% interval (one-sided [0, q68] if absolute, else central)
+    show_intervals: bool = field(default=True)
+    # Channels combined in the ranking of the input variables
+    ranking_channels: list[str] = field(
+        default_factory=lambda: ["et", "mt", "tt"]
+    )
 
 
 @dataclass
@@ -169,3 +193,4 @@ class Config:
     channels: list[Channel]
     ntuple: NTupleSource
     plotting: Plotting
+    taylor: Taylor | None = field(default=None)

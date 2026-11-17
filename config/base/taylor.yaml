@@ -1,0 +1,38 @@
+# Benchmark (m_x, m_y) hypotheses at which the Taylor coefficients are
+# evaluated: low/high m_x, light (boosted) and heavy (compressed) Y. Signal
+# events of other mass points are dropped, background events are evaluated
+# once per benchmark.
+mass_points:
+- [300, 60]
+- [300, 150]
+- [500, 100]
+- [650, 500]
+- [1000, 90]
+- [1000, 400]
+- [1000, 800]
+- [2000, 100]
+- [2000, 1000]
+- [3000, 2600]
+# Maximum number of sampled events per class and mass point (null: all)
+n_samples_per_category: 5000
+# Batch size for the gradient computation
+batch_size: 4096
+# Maximum order of the Taylor coefficients (1 or 2)
+max_order: 2
+# Compute and plot the Taylor coefficients with respect to the input
+# parameters (m_x, m_y) as well; otherwise only the input variables are
+# analyzed (the network is still evaluated with the parameters)
+include_parameters: false
+# Number of coefficients with the largest absolute median that are plotted per
+# output node, true class and mass point (null: all)
+max_coefficients: 45
+# Number of coefficients per plot
+per_plot: 15
+# Plot and rank the median of the absolute coefficients |t| (true) instead of
+# the median of t (false); sorted by this median in descending order
+absolute: true
+# Draw the 68% interval (one-sided [0, q68] if absolute, else central)
+show_intervals: true
+# Channels whose stage-1 outputs are combined in the ranking of the input
+# variables (rank_taylor_variables); channels without outputs are skipped
+ranking_channels: [et, mt, tt]

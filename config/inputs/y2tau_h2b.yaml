@@ -70,40 +70,10 @@ variables:
 - name: "bpair_deltaR"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-# - name: "jpt_1"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jpt_2"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jeta_1"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jeta_2"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jphi_1"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jphi_2"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jtag_value_1"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "jtag_value_2"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "mjj"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-# - name: "pt_dijet"
-#   transformation: "standard_scaling"
-# -----------------------------------------------------------------------------
-- name: "met_leptoncorrected"
+- name: "met"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "metphi_leptoncorrected"
+- name: "metphi"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
 - name: "mt_1"
@@ -136,10 +106,9 @@ variables:
 - name: "kinfit_mY_YToTauTau"
   transformation: "standard_scaling"
 # -----------------------------------------------------------------------------
-- name: "era"
+- name: "campaign"
   transformation: "ordinal_encoding"
   is_part_of_snapshot: false
-# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -157,3 +126,4 @@ parameters:
   transformation: "standard_scaling" # "ordinal_encoding"
   fallback_value: -10.0
   is_part_of_snapshot: false
+# -----------------------------------------------------------------------------
