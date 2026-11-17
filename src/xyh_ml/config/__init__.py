@@ -9,6 +9,7 @@ from .dataclasses import (
     Outputs,
     Plotting,
     Tags,
+    Taylor,
     Training,
     Variable,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "Outputs",
     "Plotting",
     "Tags",
+    "Taylor",
     "Training",
     "Variable",
     "yield_base_dirs",

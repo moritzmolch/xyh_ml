@@ -66,6 +66,8 @@ antlr-python-runtime = "4.9.*"
 
 [tool.pixi.pypi-dependencies]
 xyh_ml = { path = ".", editable = true }
+# Taylor coefficient analysis, git submodule (git submodule update --init)
+tayloranalysis = { path = "modules/tayloranalysis", editable = true }
 
 # Ignore packages in the user site directory (~/.local/lib/python3.X), which
 # otherwise shadow the packages of the pixi environments (e.g. an older
