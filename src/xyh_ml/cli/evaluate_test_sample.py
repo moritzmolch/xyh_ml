@@ -161,11 +161,14 @@ def filter_and_set_evaluation_parameters(
     df_bkg = data_frame.loc[~data_frame["is_signal"]]
 
     # For signal events, just keep events with parameter value combinations in
-    # unique_parameter_values
+    # unique_parameter_values. Match the combinations as a whole (e.g. the
+    # (m_x, m_y) pair), not each parameter separately, which would also keep
+    # combinations of values that are not in unique_parameter_values.
+    parameter_names = list(unique_parameter_values.columns)
     df_signal = df_signal[
-        df_signal[list(unique_parameter_values.columns)]
-        .isin(unique_parameter_values.to_dict("list"))
-        .all(axis=1)
+        pd.MultiIndex.from_frame(df_signal[parameter_names]).isin(
+            pd.MultiIndex.from_frame(unique_parameter_values)
+        )
     ]
 
     # For background events, repeat the events and set each unique parameter
@@ -235,23 +238,11 @@ def predict_for_parameters(
     return data_frame, predictions, targets, weights
 
 
-@hydra.main(
-    config_path=str(PROJECT_DIR / "config"),
-    config_name="evaluate_test_sample",
-    version_base="1.3",
-)
-def main(cfg: Config):
-    # Create output directory if it does not exist
-    predictions_dir = Path(cfg.artifacts.predictions_dir)
-    if not predictions_dir.exists():
-        predictions_dir.mkdir(parents=True)
-        logger.debug(f"Created output directory {predictions_dir}")
-
-    # Load transformations from the training artifacts
-    transformations = load_transformations(
-        Path(cfg.artifacts.training_dir) / "transformations.pkl"
-    )
-
+def load_trained_model(cfg: Config) -> Module:
+    """
+    Create the multi-layer perceptron of the configuration `cfg` and load the
+    weights of the best checkpoint from `artifacts.training_dir`.
+    """
     # Create the neural network model
     model = create_multi_layer_perceptron_model(
         len(cfg.inputs.variables) + len(cfg.inputs.parameters),
@@ -273,6 +264,29 @@ def main(cfg: Config):
             new_key = key.replace("model.", "", 1)
         best_model_state_dict[new_key] = best_model_state_dict.pop(key)
     model.load_state_dict(best_model_state_dict)
+
+    return model
+
+
+@hydra.main(
+    config_path=str(PROJECT_DIR / "config"),
+    config_name="evaluate_test_sample",
+    version_base="1.3",
+)
+def main(cfg: Config):
+    # Create output directory if it does not exist
+    predictions_dir = Path(cfg.artifacts.predictions_dir)
+    if not predictions_dir.exists():
+        predictions_dir.mkdir(parents=True)
+        logger.debug(f"Created output directory {predictions_dir}")
+
+    # Load transformations from the training artifacts
+    transformations = load_transformations(
+        Path(cfg.artifacts.training_dir) / "transformations.pkl"
+    )
+
+    # Create the neural network model and load the best checkpoint
+    model = load_trained_model(cfg)
 
     # Load the input files into a data frame from the fold that the network has
     # not been trained on
