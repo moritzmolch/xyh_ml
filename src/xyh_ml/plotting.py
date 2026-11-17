@@ -3,6 +3,7 @@ Shared helpers for the plotting scripts of the classification performance.
 """
 
 import logging
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 
@@ -75,7 +76,7 @@ def get_style_color(index: int) -> str:
 def add_cms_label(
     ax: Axes,
     rlabel: str,
-    llabel: str = "Private Work",
+    llabel: str = "Work in progress",
 ) -> None:
     """
     Add the CMS label to the upper left and a description to the upper right
@@ -89,7 +90,7 @@ def add_cms_label(
         Text on the upper right of the axes.
     llabel : str, optional
         Text following "CMS" on the upper left of the axes. Default is
-        `"Private Work"`.
+        `"Work in progress"`.
     """
     hep.cms.label(llabel, ax=ax, data=True, rlabel=rlabel, loc=0)
 
@@ -115,7 +116,12 @@ def get_predictions_file(cfg: Config) -> Path:
     )
 
 
-def load_predictions(cfg: Config, merge_folds: bool = False) -> DataFrame:
+def load_predictions(
+    cfg: Config,
+    merge_folds: bool = False,
+    get_file: Callable[[Config], Path] = get_predictions_file,
+    key: str | None = None,
+) -> DataFrame:
     """
     Load the predictions written by `evaluate_test_sample`.
 
@@ -138,6 +144,11 @@ def load_predictions(cfg: Config, merge_folds: bool = False) -> DataFrame:
         `artifacts.predictions_dir` is resolved separately for each fold.
     merge_folds : bool, optional
         If `True`, merge the predictions of all folds. Default is `False`.
+    get_file : Callable[[Config], Path], optional
+        Function resolving the per-fold file from the configuration. Default
+        is `get_predictions_file`.
+    key : str, optional
+        HDF5 key to read. Default is `None` (the only key of the file).
 
     Returns
     -------
@@ -159,7 +170,7 @@ def load_predictions(cfg: Config, merge_folds: bool = False) -> DataFrame:
     for fold in folds:
         cfg_fold = deepcopy(cfg)
         cfg_fold.mode.fold = fold
-        input_files[fold] = get_predictions_file(cfg_fold)
+        input_files[fold] = get_file(cfg_fold)
 
     # Report all missing files at once
     missing = [str(f) for f in input_files.values() if not f.exists()]
@@ -171,7 +182,11 @@ def load_predictions(cfg: Config, merge_folds: bool = False) -> DataFrame:
     # Load the predictions of each fold
     data_frames = []
     for fold, input_file in input_files.items():
-        df = pd.read_hdf(input_file)
+        df = (
+            pd.read_hdf(input_file)
+            if key is None
+            else pd.read_hdf(input_file, key=key)
+        )
         df["eval_fold"] = fold
         data_frames.append(df)
         logger.info(f"Loaded {len(df)} predictions from {input_file}")
@@ -474,11 +489,16 @@ def plot_mass_grid(
     return fig, ax
 
 
-def save_figure(fig: Figure, cfg: Config, stem: str) -> list[Path]:
+def save_figure(
+    fig: Figure,
+    cfg: Config,
+    stem: str,
+    subdir: str | None = None,
+) -> list[Path]:
     """
     Save `fig` as PDF and PNG to the plot directory of the training tag,
-    `<PROJECT_DIR>/data/output/<training_tag>/plots/<stem>.{pdf,png}`, and
-    close it.
+    `<PROJECT_DIR>/data/output/<training_tag>/plots/[<subdir>/]<stem>.{pdf,png}`,
+    and close it.
 
     Returns
     -------
@@ -487,6 +507,8 @@ def save_figure(fig: Figure, cfg: Config, stem: str) -> list[Path]:
     """
     output_dir = PROJECT_DIR / "data" / "output" / cfg.tags.training_tag
     output_dir = output_dir / "plots"
+    if subdir is not None:
+        output_dir = output_dir / subdir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_files = []
